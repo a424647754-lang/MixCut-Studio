@@ -745,6 +745,8 @@ class AnalysisWorker(QThread):
 # =========================================================
 
 WASTE_RED = "#F05A52"
+# 「手动保留」标记色：算法判废但用户坚持保留的片段
+WASTE_AMBER = "#E7B06B"
 
 # 缩略图缓存上限：超出后按最久未用淘汰。
 # 以前是无上限的全局字典，分析大素材时每张卡片都会往里面塞一份
@@ -1170,6 +1172,16 @@ class FragmentCard(QWidget):
             p.setPen(QColor(T.TEXT_2))
             p.setFont(T.font(9, QFont.Weight.DemiBold))
             p.drawText(chip, Qt.AlignmentFlag.AlignCenter, "不加入")
+        elif waste and it.get("manual_included"):
+            # 手动保留：算法判废、但用户坚持要用的片段。
+            # 必须和普通片段区分开，否则用户会疑惑「明明标了废，怎么还进混剪了」。
+            chip = QRectF(thumb_rect.left() + 8, thumb_rect.top() + 8, 66, 18)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(WASTE_AMBER))
+            p.drawRoundedRect(chip, 5, 5)
+            p.setPen(QColor("#1A1206"))
+            p.setFont(T.font(9, QFont.Weight.DemiBold))
+            p.drawText(chip, Qt.AlignmentFlag.AlignCenter, "手动保留")
 
         # 标题
         x = r.left() + 12
@@ -3223,6 +3235,20 @@ class AnalyzePage(QWidget):
                     if n > 0 else "混剪池 -/-")
             if sel:
                 text += "  ·  已选 %d" % sel
+            # 把「自动判废」与「手动保留」说清楚：
+            # 判废只是扣分标记，是否进池由 included 决定，两者不能混为一谈。
+            scope = set(self._get_paths() or [])
+            results = [r for r in self._results
+                       if not scope or str(r.get("path") or "") in scope]
+            auto_bad = sum(1 for r in results
+                           if r.get("is_bad") and not r.get("manual_included"))
+            kept_bad = sum(1 for r in results
+                           if r.get("is_bad") and r.get("manual_included")
+                           and r.get("included", True))
+            if auto_bad:
+                text += "  ·  自动判废 %d" % auto_bad
+            if kept_bad:
+                text += "  ·  手动保留 %d" % kept_bad
             self.pool_status_label.setText(text)
         if hasattr(self, "pool_toolbar"):
             self.pool_toolbar.setVisible(True)
@@ -3378,6 +3404,14 @@ class AnalyzePage(QWidget):
         action = (menu.addAction("✕  不加入这个片段")
                   if item.get("included", True)
                   else menu.addAction("✓  加入这个片段"))
+
+        # 废片被手动勾回时，把当前状态说清楚，避免用户困惑
+        # 「明明标了废，怎么还进混剪了」。
+        if item.get("is_bad") and item.get("manual_included") \
+                and item.get("included", True):
+            status_act = menu.addAction("⚠  当前：手动保留的废片段")
+            status_act.setEnabled(False)
+            menu.addSeparator()
 
         # 右键操作的作用对象在这里**一次性快照**：
         # 已经多选 → 作用于整组；只点了这一张 → 只作用于它。
