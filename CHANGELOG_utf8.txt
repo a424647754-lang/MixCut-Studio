@@ -1,0 +1,43 @@
+MixCut 三文件质量选片升级
+
+修改文件
+- bad_shot_detector.py
+- analysis.py
+- mixbuilder.py
+
+核心变化
+1. bad_shot_detector.py
+   - 从“全视频取最差一帧代表整条素材”改为固定 5 秒窗口独立评分。
+   - 每个窗口默认采样 3 帧，使用中位数聚合，单帧异常不会直接拖垮整个窗口。
+   - 清晰度、曝光、对比度、噪点形成 0-100 质量分。
+   - 帧间差仅作为运动变化信息，不再把高运动直接判定为手抖。
+   - 增加取消检查；不把低分窗口直接硬删除。
+
+2. analysis.py
+   - 删除 amverge 关键帧镜头检测及其场景边界拆分函数。
+   - 保留黑屏、静止、静音废段检测。
+   - 新增质量窗口分析结果，并提供 quality_pieces_for() 将有效区间按质量窗口切分。
+   - OpenCV/解码评估失败时使用中性质量分，不中断整批分析。
+
+3. mixbuilder.py
+   - 质量分正式进入候选区间评分，画面质量较好的窗口会获得更高优先级。
+   - 低分只降低入选优先级，不强制删除，避免素材不足时无法成片。
+   - 删除旧镜头边界取片逻辑、边界对齐评分、无效状态变量。
+   - 删除重复的素材总时长校验代码。
+
+清理内容
+- 删除 amverge 导入和 detect_scenes_by_keyframe 调用。
+- 删除 _scenes、scene_starts、split_by_boundaries、boundaries_in 等旧镜头边界残留。
+- 删除 _pick_cut、_cut_quality_score 等依赖镜头边界的旧逻辑。
+- 删除未使用的 last_range_idx、旧强拍优先变量残留。
+
+默认参数
+- quality_detect = True
+- quality_segment_duration = 5.0
+- quality_samples_per_segment = 3
+- quality_weight = 2.5
+
+注意
+- 这次实现的是技术画质质量排序，不是语义理解。它能降低明显模糊、严重曝光异常、噪点明显片段的入选概率，但不能判断“这个人说的话有没有价值”“动作是否完整”“这个镜头是否符合成片主题”。这些属于内容语义判断，不能靠 OpenCV 的清晰度/亮度指标冒充。
+- 质量评估会对素材额外抽帧分析，长素材分析时间可能增加。可在 detect_options 中设置 quality_detect=False 临时关闭。
+- 修改仅覆盖这三个源文件。项目其他模块如果直接读取 _scenes 或调用 scene_starts/boundaries_in，需要同步移除对应调用；本次三个文件内部已清理这些依赖。

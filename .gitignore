@@ -1,0 +1,146 @@
+# =========================================================
+# MixCut Studio · .gitignore
+# 原则：只提交源码与文档，绝不提交模型、运行时、素材、产物
+# =========================================================
+
+# ---------- 大体积依赖与运行时（绝对不能提交） ----------
+# OpenCLIP 模型权重（约 1.7GB）与 venv（约 3GB）
+OpenCLIP/
+# ffmpeg / ffprobe 可执行文件（约 434MB）
+ffmpeg/
+ffmpeg-*/
+# CUDA / 推理引擎
+engine/
+# 分析缓存与代理缓存（约 2.3GB）
+cache/
+.preview_proxy/
+proxy_cache/
+
+# ---------- 构建与打包产物 ----------
+build/
+dist/
+installer_output/
+*.spec
+!MixCutStudio.spec
+build_out.log
+installer_build.log
+
+# ---------- Python 缓存 ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 备份与临时文件 ----------
+# 本项目的历史备份用 .bak-时间戳 命名
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.tmp
+*.log
+!docs/*.log
+~$*
+
+# ---------- 媒体素材（版权/体积问题，不进仓库） ----------
+*.mp4
+*.mov
+*.mkv
+*.m4v
+*.avi
+*.webm
+*.flv
+*.wmv
+*.ts
+*.mp3
+*.wav
+*.flac
+*.aac
+*.m4a
+*.cube
+*.lrf
+*.psd
+*.ai
+
+# ---------- 字体 ----------
+# 程序真正使用的是 mixcut/ui/fonts/msyh.ttf，必须保留。
+# 根目录下那个同名同内容的副本（e3d4fbdd...ttf）是打包遗留，不提交。
+/e3d4fbdd543aa8769ab201fcfda4b8da.ttf
+/e3d4fbdd*.ttf
+# 其它孤立字体一律不提交
+/*.ttf
+/*.otf
+
+# ---------- 启动图（仅打包版使用，源码运行不需要） ----------
+assets/splash_*
+assets/*banner*
+assets/*brand*
+# 程序图标必须保留
+!assets/app.png
+!assets/*.ico
+# 界面缩略图占位（体积大且是设计稿）不提交
+assets/*.jpg
+assets/*.jpeg
+/*.png
+/*.jpg
+
+# ---------- 工程与个人数据 ----------
+*.mixcut
+# 用户编辑产生的自动保存
+*.autosave
+*.mixcut.bak
+
+# ---------- IDE / 系统 ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本机专属配置 ----------
+config/local.*
+*.local.json
+.env
+.env.*
+*.pem
+*.key
+
+# ---------- 临时分析与诊断脚本（可重新生成） ----------
+tests/_crash_scan.py
+tests/_crash_scan.txt
+tests/_dead_code_scan.py
+tests/_dead_code_report.txt
+tests/_dead_code_verify.py
+tests/_dead_code_verify.txt
+tests/_perf_scan.py
+tests/_perf_report.txt
+tests/_size_scan.py
+tests/_size_report.txt
+tests/_grid_dump.txt
+
+# ---------- 归档与导出 ----------
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+bench_results/
+_verify_ui_*/
+*_便签取证_*/
+
+# ��ʱ�ļ�����ʷ��¼����
+_git_history_backup.txt
+tests/_*.txt
+tests/_*.py
+

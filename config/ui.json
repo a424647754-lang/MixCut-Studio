@@ -1,0 +1,12 @@
+{
+  "palette": "石墨深色",
+  "accent": "紫色",
+  "motion": {
+    "page": true,
+    "button": true,
+    "number": true,
+    "reduce_follow": true
+  },
+  "draft_dir": "C:\\Users\\Administrator\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft",
+  "clean_days": 14
+}

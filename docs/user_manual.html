@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MixCut Studio 用户手册</title>
+<style>
+:root{
+  --bg:#f5f7f8; --panel:#ffffff; --ink:#1f2933; --muted:#60707d;
+  --line:#dfe6ea; --accent:#176b61; --accent-soft:#e7f3f0;
+  --dark:#162027; --code:#f1f5f6;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif;
+  font-size:15px;line-height:1.8;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.hero{
+  background:linear-gradient(135deg,#162027 0%,#22343b 58%,#1d4f49 100%);
+  color:#f3f7f8;padding:54px 6vw 44px;
+}
+.hero .kicker{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#9fc9c2}
+.hero h1{font-size:38px;line-height:1.25;margin:12px 0 10px;font-weight:700}
+.hero p{max-width:820px;margin:0;color:#cfdde0;font-size:16px}
+.hero .meta{margin-top:24px;display:flex;gap:12px;flex-wrap:wrap}
+.hero .meta span{
+  border:1px solid rgba(255,255,255,.22);border-radius:999px;
+  padding:5px 12px;font-size:12px;color:#e7f1f2
+}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:32px;max-width:1320px;margin:0 auto;padding:32px 24px 80px}
+.toc{
+  position:sticky;top:20px;align-self:start;background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;padding:18px 16px;
+  max-height:calc(100vh - 40px);overflow:auto;
+}
+.toc h2{font-size:13px;margin:0 0 10px;color:var(--muted);letter-spacing:.08em}
+.toc ol{list-style:none;margin:0;padding:0;counter-reset:item}
+.toc li{margin:2px 0}
+.toc li a{display:block;padding:7px 8px;border-radius:7px;color:#34434d;font-size:13px}
+.toc li a:hover{background:var(--accent-soft);text-decoration:none;color:var(--accent)}
+.toc .sub{padding-left:14px;font-size:12px!important;color:#6d7d88!important}
+main{min-width:0}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:28px 32px;margin:0 0 18px;box-shadow:0 8px 24px rgba(22,32,39,.035)
+}
+h2{font-size:26px;line-height:1.35;margin:8px 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+h2 .num{color:var(--accent);font-weight:700;margin-right:8px}
+h3{font-size:18px;margin:26px 0 8px;color:#1b2f38}
+h4{font-size:15px;margin:18px 0 6px;color:#2b3f48}
+p{margin:8px 0}
+ul,ol{padding-left:24px;margin:8px 0}
+li{margin:4px 0}
+.lead{font-size:16px;color:#40525d;background:var(--accent-soft);border-left:3px solid var(--accent);padding:12px 16px;border-radius:6px}
+.note,.warn,.tip{border-radius:8px;padding:12px 16px;margin:14px 0;font-size:14px}
+.note{background:#f3f7f8;border:1px solid var(--line)}
+.warn{background:#fff5ec;border:1px solid #f3d2b3;color:#68401e}
+.tip{background:#edf7f3;border:1px solid #cbe7dc;color:#225b4e}
+.note strong,.warn strong,.tip strong{display:block;margin-bottom:4px;font-size:13px;letter-spacing:.04em}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th,td{border:1px solid var(--line);padding:9px 10px;vertical-align:top;text-align:left}
+th{background:#edf2f3;font-weight:600;color:#253740}
+td:first-child{white-space:nowrap}
+tbody tr:nth-child(even){background:#fbfcfc}
+code{background:var(--code);border:1px solid #e2eaed;border-radius:4px;padding:1px 5px;font-family:Consolas,"Courier New",monospace;font-size:13px}
+pre{background:#172229;color:#e6f0f2;border-radius:9px;padding:14px 16px;overflow:auto;font-size:13px;line-height:1.65}
+pre code{background:none;border:0;padding:0;color:inherit}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:12px 0}
+.mini{background:#f8fafb;border:1px solid var(--line);border-radius:9px;padding:14px}
+.mini h4{margin:0 0 6px;color:var(--accent);font-size:14px}
+.mini p{margin:0;font-size:13.5px;color:#4d5f6a}
+.pill{display:inline-block;border:1px solid #cfe1dd;background:#f1f8f6;color:#2c645a;border-radius:999px;padding:2px 9px;font-size:12px;margin:2px 3px 2px 0;white-space:nowrap}
+.footer{margin-top:28px;color:#7a8a94;font-size:12.5px;text-align:center}
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr;padding:18px 14px 60px}
+  .toc{position:static;max-height:none}
+  .card{padding:22px 18px}
+  .hero{padding:36px 20px}
+  .hero h1{font-size:30px}
+  .grid{grid-template-columns:1fr}
+}
+@media print{
+  body{background:#fff;font-size:12pt}
+  .hero{background:#fff;color:#111;border-bottom:2px solid #222}
+  .hero p,.hero .kicker,.hero .meta span{color:#333}
+  .toc{display:none}
+  .layout{display:block;padding:0}
+  .card{box-shadow:none;border:0;padding:0;margin:0 0 18px;page-break-inside:auto}
+  h2{page-break-after:avoid}
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="kicker">MixCut Studio · Reference Manual</div>
+  <h1>用户手册</h1>
+  <p>完整功能参考。按“素材库 → 素材预览 → AI 分析 → 参数设置 → 任务中心”的顺序，说明每个页面的入口、真实行为、参数含义、限制条件和故障处理方式。</p>
+  <div class="meta"><span>版本 1.0.0</span><span>适用平台 Windows 10 / 11 64 位</span><span>随程序分发</span></div>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="目录">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#s1">1　认识 MixCut Studio</a></li>
+    <li><a href="#s2">2　安装、启动与界面</a></li>
+    <li><a href="#s3">3　工程管理</a></li>
+    <li><a href="#s4">4　素材库</a></li>
+    <li><a href="#s5">5　素材预览</a></li>
+    <li><a href="#s6">6　AI 分析</a></li>
+    <li><a href="#s7">7　参数设置</a></li>
+    <li><a href="#s8">8　任务中心</a></li>
+    <li><a href="#s9">9　设置</a></li>
+    <li><a href="#s10">10　键盘快捷键</a></li>
+    <li><a href="#s11">11　代理、解码与性能</a></li>
+    <li><a href="#s12">12　常见问题与故障排除</a></li>
+    <li><a href="#s13">13　典型工作流</a></li>
+    <li><a href="#s14">14　附录</a></li>
+  </ol>
+</nav>
+
+<main>
+<section class="card" id="s1">
+<h2><span class="num">1</span>认识 MixCut Studio</h2>
+<p class="lead">MixCut Studio 是面向本地素材的 AI 混剪工作台。它把素材导入、镜头分析、参数配置、片段筛选、时间线生成和剪映草稿输出收在一条流程里。</p>
+<h3>1.1 它解决什么问题</h3>
+<p>核心工作不是“随机拼接”，而是先从素材中找出可用片段，再按时长、重复度、画面质量、卡点、转场和配乐规则生成一条可继续编辑的时间线，最后写入剪映草稿。人在剪映里仍然可以逐段调整。</p>
+<h3>1.2 完整流程</h3>
+<table>
+<tr><th>阶段</th><th>页面</th><th>你要做的事</th><th>产出</th></tr>
+<tr><td>准备</td><td>素材库</td><td>导入视频、建文件夹分类、勾选要分析的范围</td><td>素材清单</td></tr>
+<tr><td>检查</td><td>素材预览</td><td>播放原片或代理，确认画面、时长与声音</td><td>预览结论</td></tr>
+<tr><td>分析</td><td>AI 分析</td><td>选择快速、中度或严格分析，等待片段结果</td><td>镜头片段与评分</td></tr>
+<tr><td>配置</td><td>参数设置</td><td>设时长、重复度、版本、卡点、转场与配乐</td><td>混剪规则</td></tr>
+<tr><td>执行</td><td>任务中心</td><td>启动全流程，查看进度、日志与输出</td><td>剪映草稿</td></tr>
+<tr><td>收尾</td><td>剪映</td><td>打开草稿，做人工精修与导出</td><td>成片</td></tr>
+</table>
+<h3>1.3 五个主页面</h3>
+<p><span class="pill">素材库</span><span class="pill">素材预览</span><span class="pill">AI 分析</span><span class="pill">参数设置</span><span class="pill">任务中心</span>，设置页从顶栏齿轮进入，不占用主导航位。</p>
+<h3>1.4 名称对照</h3>
+<p>界面里的“素材分析”就是 AI 分析页；“工作台 / 素材预览”是同一个预览页；任务中心里的“写入草稿”指把生成结果写进剪映草稿目录，不是直接导出 MP4。</p>
+<h3>1.5 两种使用方式</h3>
+<ul>
+<li><strong>安装版：</strong>通过安装包安装，自带 Python、PySide6、FFmpeg 与所需运行库，不需要另装环境。</li>
+<li><strong>源码 / 绿色版：</strong>在工程根直接运行，适合开发与调试；缓存和配置写在工程目录，目录不可写时回退到用户目录。</li>
+</ul>
+<div class="note"><strong>重要边界</strong>MixCut 负责生成可编辑草稿，不替代剪映的最终调色、字幕、导出。草稿生成后仍建议逐段检查。</div>
+</section>
+
+<section class="card" id="s2">
+<h2><span class="num">2</span>安装、启动与界面</h2>
+<h3>2.1 安装版</h3>
+<ol>
+<li>运行 <code>MixCutStudio_Setup_v1.0.0.exe</code>。</li>
+<li>安装程序需要管理员权限，默认安装到 <code>C:\Program Files\MixCutStudio</code>。</li>
+<li>安装完成后从开始菜单或桌面图标启动 <code>MixCutStudio.exe</code>。</li>
+<li>首次启动会创建缓存与配置目录；如果安装目录不可写，会自动回退到 <code>%LOCALAPPDATA%\MixCut</code>。</li>
+</ol>
+<h3>2.2 启动界面</h3>
+<p>安装版启动图从三张品牌图中随机选择一张，底部显示真实加载进度条；源码运行使用固定的品牌启动图。进度条反映初始化步骤，不是装饰动画。</p>
+<h3>2.3 主界面</h3>
+<ul>
+<li><strong>顶栏：</strong>工程入口、页面状态、设置齿轮和窗口控制。</li>
+<li><strong>左侧导航：</strong>素材库、素材预览、AI 分析、参数设置、任务中心。</li>
+<li><strong>内容区：</strong>当前页面的卡片、列表、预览器或参数表单。</li>
+<li><strong>底部状态区：</strong>任务、日志和当前工程提示。</li>
+</ul>
+<h3>2.4 关闭与保存</h3>
+<p>关闭窗口前如果有未保存改动，程序会提示保存工程。工程保存的是路径和配置，不内嵌素材文件；移动素材或换机后需要保证原路径可访问。</p>
+<h3>2.5 系统要求</h3>
+<table>
+<tr><th>项目</th><th>建议</th></tr>
+<tr><td>系统</td><td>Windows 10 / 11 64 位</td></tr>
+<tr><td>内存</td><td>16 GB 起，4K 多轨建议 32 GB</td></tr>
+<tr><td>显卡</td><td>支持 NVENC 的 NVIDIA 显卡更佳；没有也能用 CPU 编码</td></tr>
+<tr><td>磁盘</td><td>系统盘留出足够缓存空间，代理会额外占用磁盘</td></tr>
+<tr><td>显示</td><td>1920×1080 起；高 DPI 缩放由 Qt 处理</td></tr>
+<tr><td>剪映</td><td>已安装剪映专业版，并能正常打开草稿目录</td></tr>
+</table>
+</section>
+
+<section class="card" id="s3">
+<h2><span class="num">3</span>工程管理</h2>
+<h3>3.1 新建、打开、保存</h3>
+<p>顶栏和设置页都提供工程入口。快捷键为 <code>Ctrl+N</code> 新建、<code>Ctrl+O</code> 打开、<code>Ctrl+S</code> 保存。</p>
+<h3>3.2 工程文件</h3>
+<p>工程文件扩展名为 <code>.mixcut</code>，内容是 JSON，当前版本号为 3。保存时先写临时文件，再替换正式文件，并保留 <code>.bak</code> 备份，降低写入中断导致工程损坏的概率。</p>
+<h3>3.3 工程里保存什么</h3>
+<table>
+<tr><th>数据</th><th>是否保存</th><th>说明</th></tr>
+<tr><td>素材路径与列表</td><td>是</td><td>保存绝对路径，不复制素材文件</td></tr>
+<tr><td>文件夹分类与标签</td><td>是</td><td>库内虚拟分类，不移动磁盘文件</td></tr>
+<tr><td>素材元数据</td><td>是</td><td>分辨率、时长、帧率、编码等</td></tr>
+<tr><td>AI 分析结果</td><td>是</td><td>已完成的片段与评分</td></tr>
+<tr><td>混剪参数</td><td>是</td><td>时长、重复度、卡点、配乐等</td></tr>
+<tr><td>输出配置</td><td>是</td><td>草稿目录与命名规则</td></tr>
+<tr><td>素材视频本体</td><td>否</td><td>只引用原文件</td></tr>
+</table>
+<h3>3.4 换机与迁移</h3>
+<p>把工程文件和素材一起迁移，保持素材在原绝对路径；如果路径变了，先在素材库重新定位或重新导入，再继续分析和混剪。不要只拷工程文件，否则打开后会出现素材缺失。</p>
+<h3>3.5 撤销</h3>
+<p><code>Ctrl+Z</code> 撤销上一步，<code>Ctrl+Y</code> 或 <code>Ctrl+Shift+Z</code> 恢复。保存工程后继续操作，再按 <code>Ctrl+S</code> 会更新当前工程文件。</p>
+<h3>3.6 工程异常排查</h3>
+<ul>
+<li>打开后是空白工程：确认打开的是 <code>.mixcut</code>，不是旧版配置或别的 JSON。</li>
+<li>素材全部显示缺失：检查原路径是否还在，盘符是否变化。</li>
+<li>工程打不开：先用同目录的 <code>.bak</code> 备份替换，再逐项检查 JSON 是否被外部工具改坏。</li>
+</ul>
+</section>
+
+<section class="card" id="s4">
+<h2><span class="num">4</span>素材库</h2>
+<h3>4.1 页面结构</h3>
+<p>素材库由文件夹分类、素材卡片列表、筛选栏和底部操作区组成。单击选中，右键打开单项菜单，勾选用于批量分析。</p>
+<h3>4.2 导入与扫描</h3>
+<ol>
+<li>点“导入素材”，选择一个或多个视频文件。</li>
+<li>需要整目录导入时，选择文件夹，程序扫描其中的视频。</li>
+<li>导入后等待元数据读取完成，再开始分析。</li>
+</ol>
+<p>支持常见视频格式；具体能否解码取决于内置 FFmpeg 与系统解码能力。导入只建立引用，不复制原文件。</p>
+<h3>4.3 筛选与排序</h3>
+<p>可按文件名、时长、分辨率、分析状态筛选；排序用于快速找到最长、最短或最近导入的素材。筛选只影响当前列表显示，不改变工程数据。</p>
+<h3>4.4 文件夹分类</h3>
+<p>文件夹是库内虚拟分类。把素材放进文件夹不会移动磁盘文件，也不会删除原素材。删除文件夹时，里面的素材会回到“全部素材”。</p>
+<h3>4.5 勾选与“分析选中”</h3>
+<p class="lead">分析范围遵循一条明确规则：有勾选时只分析勾选的素材；没有勾选时退回当前文件夹；当前是“全部素材”且没有勾选时，分析全部未移除素材。</p>
+<p>这就是“只选了一个素材，却分析了所有素材”的常见原因：勾选没有真正生效，或当前列表是“全部素材”且没有任何勾选。开始前看底部提示的“将分析 N 个素材”。</p>
+<h3>4.6 移除与删除</h3>
+<ul>
+<li><strong>移除：</strong>从当前素材库移除引用，不删除磁盘文件，不删除已分析片段。</li>
+<li><strong>删除：</strong>删除库内素材记录；是否联动删除已选片段取决于当前清理动作，执行前看确认提示。</li>
+<li><strong>删除文件夹：</strong>只删除分类，素材回到全部素材。</li>
+</ul>
+<div class="warn"><strong>不会删除原片</strong>素材库里的移除、删除和分类操作都不动磁盘上的视频文件。需要彻底删除原片时，请到资源管理器手动处理。</div>
+<h3>4.7 检查素材</h3>
+<p>“检查素材”用于确认文件可读、元数据可解析。检查成功弹窗可能仍显示旧文案，但实际结果以列表状态和日志为准。</p>
+<h3>4.8 标签</h3>
+<p>标签用于人工备注和筛选。标签保存在工程内，不写入视频文件元数据。</p>
+<h3>4.9 清空后的联动</p>
+<p>删除所有原素材和文件夹后，已选片段和对应分析结果会一起清理，避免留下无法对应原片的孤立片段。执行前请确认工程已保存。</p>
+</section>
+
+<section class="card" id="s5">
+<h2><span class="num">5</span>素材预览</h2>
+<h3>5.1 播放控制</h3>
+<p>预览器支持播放/暂停、进度拖动、音量、逐帧查看和全屏。快捷键 <code>Space</code> 播放/暂停，<code>P</code> 全屏，<code>Esc</code> 退出全屏。</p>
+<h3>5.2 底部素材条</h3>
+<p>底部缩略图条用于切换当前素材。单击切换，当前素材的播放位置会重置；需要保留位置时先记时间码。</p>
+<h3>5.3 元信息与全屏</h3>
+<p>预览区显示分辨率、帧率、时长、编码和当前代理状态。全屏只放大预览画面，不改变输出配置。</p>
+<h3>5.4 代理下拉框</h3>
+<p>可选档位为 <code>代理关闭</code>、<code>720p</code>、<code>960p</code>、<code>1280p</code>，默认关闭。</p>
+<h3>5.5 代理的真实工作方式</h3>
+<ul>
+<li>选择任一代理档位，会把素材库里<strong>全部视频</strong>排队生成代理，不是只代理当前这一条。</li>
+<li>当前素材代理就绪后，预览会自动换到代理源，并尽量保留播放位置。</li>
+<li>代理只影响预览。导出、草稿和最终成片仍使用原片。</li>
+<li>代理编码为 HEVC Main10、YUV420P10LE，保持原帧率，音轨为 AAC 192k。</li>
+</ul>
+<h3>5.6 档位选择</h3>
+<table>
+<tr><th>档位</th><th>适合</th><th>代价</th></tr>
+<tr><td>代理关闭</td><td>1080p 及以下、编码简单的素材</td><td>4K 10-bit 4:2:2 容易卡顿</td></tr>
+<tr><td>720p</td><td>老机器、快速浏览</td><td>细节损失明显</td></tr>
+<tr><td>960p</td><td>4K 素材的默认折中</td><td>需要等待后台生成</td></tr>
+<tr><td>1280p</td><td>需要更清晰预览</td><td>生成和播放占用更高</td></tr>
+</table>
+<h3>5.7 卡顿处理</h3>
+<p>先确认是不是 4K 10-bit 4:2:2 原片。若是，选择 960p 代理并等当前素材代理完成；仍然卡顿时，暂停后台分析或避免同时预览原片。代理生成期间 CPU 占用高属于正常现象。</p>
+</section>
+
+<section class="card" id="s6">
+<h2><span class="num">6</span>AI 分析</h2>
+<h3>6.1 页面名称与入口</h3>
+<p>页面标题是“素材分析”，代码位置为 <code>mixcut/ui/analyze_page.py</code>。分析页没有“开始分析”按钮，启动入口只在素材库的“分析选中”。分析页提供暂停/继续和停止。</p>
+<h3>6.2 三档模式</h3>
+<table>
+<tr><th>模式</th><th>抽帧</th><th>判废阈值</th><th>适合</th></tr>
+<tr><td>快速分析</td><td>3 帧</td><td>0.66</td><td>长素材初筛，速度快</td></tr>
+<tr><td>中度分析（默认）</td><td>6 帧</td><td>0.5</td><td>常规混剪</td></tr>
+<tr><td>严格分析</td><td>12 帧</td><td>0.34</td><td>高质量片、关键镜头</td></tr>
+</table>
+<h3>6.3 统计卡片与进度</h3>
+<p>顶部统计卡片显示素材数、已分析数、可用片段数和判废数。进度条按当前素材推进，不保证总耗时线性。</p>
+<h3>6.4 暂停与停止</h3>
+<p>暂停会停止继续抽帧，已经完成的片段保留；继续后从断点接着跑。停止会结束当前批次，未完成的素材不再继续。</p>
+<h3>6.5 片段卡片</h3>
+<p>每个片段显示时间码、时长、评分和缩略图。右键可以把片段“加入”或“排除”。加入表示允许进入混剪候选，排除表示本次不使用。</p>
+<h3>6.6 完成条件</h3>
+<p>素材的所有待分析区间都处理完，且片段结果写入分析缓存，才算完成。中途关闭软件不会丢失已完成素材的结果，重新打开工程后可继续。</p>
+<h3>6.7 切模式增量补齐</h3>
+<p>从快速切到中度或严格时，程序只补做不足的部分，不把已完成结果全部重跑。片段按 5 秒分段，片段 ID 保持稳定，便于工程恢复后继续引用。</p>
+<h3>6.8 性能建议</h3>
+<ul>
+<li>批量分析时不要同时预览 4K 原片。</li>
+<li>需要边分析边看素材时，先给素材生成 960p 代理。</li>
+<li>分析期间 CPU 高是正常的：解码、缩放、色彩转换主要落在 CPU。</li>
+<li>机器性能有限时，先用快速模式初筛，再对重点素材跑严格模式。</li>
+</ul>
+</section>
+
+<section class="card" id="s7">
+<h2><span class="num">7</span>参数设置</h2>
+<h3>7.1 基础参数</h3>
+<p>基础参数决定输出草稿的整体形态：成片时长、片段数量、画布比例、目标版本数。参数改动只影响下一次任务，不回改已完成草稿。</p>
+<h3>7.2 重复、时长、版本与卡点</h3>
+<table>
+<tr><th>参数</th><th>作用</th><th>建议</th></tr>
+<tr><td>重复度</td><td>控制同一素材或相似镜头被重复使用的程度</td><td>先严后松，避免成片雷同</td></tr>
+<tr><td>片段时长</td><td>单段最短/最长时长</td><td>短视频 1.5–4 秒起</td></tr>
+<tr><td>版本数</td><td>一次生成几条不同时间线</td><td>先 1 条验证，再批量</td></tr>
+<tr><td>卡点</td><td>按音乐节拍对齐切点</td><td>先有可用的配乐再开</td></tr>
+</table>
+<h3>7.3 五个开关</h3>
+<p>界面上的五个开关分别控制筛选、废镜头、配乐、卡点和转场等链路。关闭某个开关时，对应逻辑不参与本次生成；不要把“关闭”理解为“恢复默认”。</p>
+<h3>7.4 筛选引擎</h3>
+<p>筛选引擎按评分、时长、重复度、黑名单和可用状态筛片段。严格模式分析出的片段更适合高质量任务，快速模式适合先跑通流程。</p>
+<h3>7.5 废镜头</h3>
+<p>废镜头规则用于排除明显不可用片段，例如过暗、过亮、严重模糊、静止或命中黑名单关键词的镜头。阈值过高会误删可用镜头，过低会放进废片。</p>
+<h3>7.6 配乐、卡点与闪避</h3>
+<ul>
+<li><strong>配乐：</strong>选择音频文件或目录，任务生成时加入草稿。</li>
+<li><strong>卡点：</strong>按节拍对齐切点；没有节拍数据时退化为普通切点。</li>
+<li><strong>闪避：</strong>人声出现时降低配乐音量；需要音频分析结果。</li>
+</ul>
+<h3>7.7 转场与黑名单</h3>
+<p>实际规则是：短于短镜头阈值，或命中黑名单关键词的切点，一律硬切；其余切点叠化。<code>long_threshold</code> 当前未被实际使用，不要理解为“长于阈值必叠化”。</p>
+<h3>7.8 草稿位置</h3>
+<p>草稿目录默认自动探测剪映草稿目录，可在设置页手动改。生成前确认目录存在且剪映能读取。</p>
+<h3>7.9 “取消”的真实含义</h3>
+<p>参数页的“取消”是取消正在运行的混剪任务，不是把参数恢复默认。恢复默认请用“恢复默认”按钮。</p>
+<h3>7.10 起步参数</h3>
+<p>第一次使用建议：时长 30 秒、版本 1、重复度中高、片段 1.5–4 秒、卡点关闭、转场默认。跑通并检查草稿后再逐项放开。</p>
+</section>
+
+<section class="card" id="s8">
+<h2><span class="num">8</span>任务中心</h2>
+<h3>8.1 页面结构</h3>
+<p>任务中心由任务队列、当前任务进度、输出区和日志组成。它既是启动入口，也是失败排查的第一现场。</h3>
+<h3>8.2 两个启动入口</h3>
+<p>可以从参数页启动，也可以从任务中心启动全流程。两个入口使用同一套任务队列，重复点击不会并行生成同一个任务。</p>
+<h3>8.3 四个阶段</h3>
+<table>
+<tr><th>阶段</th><th>做什么</th><th>卡住时看什么</th></tr>
+<tr><td>准备素材</td><td>检查素材可用性、路径和分析结果</td><td>素材是否缺失、分析是否完成</td></tr>
+<tr><td>生成时间线</td><td>按参数筛选片段并排时间线</td><td>片段数量、重复度、卡点</td></tr>
+<tr><td>渲染片段</td><td>生成草稿需要的片段与转场</td><td>FFmpeg 日志、磁盘空间</td></tr>
+<tr><td>写入草稿</td><td>写入剪映草稿目录</td><td>草稿目录权限、剪映是否占用</td></tr>
+</table>
+<h3>8.4 导出摘要与输出区</h3>
+<p>任务完成后输出区给出草稿名称、路径、片段数和时长。先看摘要，再去剪映打开对应草稿。</p>
+<h3>8.5 任务队列</h3>
+<p>多版本任务会进入队列顺序执行。队列中的任务可以暂停、取消；取消只终止未完成部分，不删除已经写好的草稿。</p>
+<h3>8.6 日志</h3>
+<p>日志按阶段记录关键动作和错误。排查时先复制第一条错误，而不是只看最后一行“失败”。</p>
+<h3>8.7 状态对照</h3>
+<table>
+<tr><th>状态</th><th>含义</th><th>可做的操作</th></tr>
+<tr><td>排队中</td><td>等待前一个任务</td><td>等待或取消</td></tr>
+<tr><td>运行中</td><td>正在准备、生成或渲染</td><td>暂停/取消</td></tr>
+<tr><td>已暂停</td><td>保留进度，等待继续</td><td>继续或取消</td></tr>
+<tr><td>已完成</td><td>草稿已写入</td><td>打开输出目录</td></tr>
+<tr><td>失败</td><td>某阶段报错</td><td>看日志、修复后重跑</td></tr>
+</table>
+<h3>8.8 导入剪映</h3>
+<p>任务完成后到剪映“草稿”列表找到对应工程。若没有出现，先在设置页确认草稿目录，再点任务中心的“打开输出目录”。</p>
+</section>
+
+<section class="card" id="s9">
+<h2><span class="num">9</span>设置</h2>
+<h3>9.1 顶部操作</h3>
+<p>设置页顶部提供新建工程、打开工程、保存工程和重新检测。重新检测会刷新运行环境与后台组件状态。</p>
+<h3>9.2 外观</h3>
+<p>可选石墨深色、深空黑、暖灰三种主题，以及白、紫、蓝、绿强调色；点选立即生效并记住。</p>
+<h3>9.3 动效</h3>
+<p>页面切换、按钮反馈、数字滚动和动效降级都可以单独开关。系统开启“减弱动态效果”时，程序会跟随降级。</p>
+<h3>9.4 快捷键卡片</h3>
+<p>设置页只展示最常用的五组快捷键，完整列表见本手册第 10 章。</p>
+<h3>9.5 运行环境</h3>
+<p>自动读取显卡型号与 CUDA 版本、当前预览分辨率、素材色彩位深和剪映草稿目录。没有 NVIDIA 显卡时显示 CPU 软解。</p>
+<h3>9.6 缓存与草稿</h3>
+<p>显示草稿数量、缓存占用和清理策略。缓存默认写在程序目录的 <code>cache</code>；安装目录不可写时回退到 <code>%LOCALAPPDATA%\MixCut\cache</code>。代理缓存在 <code>cache/proxy</code>。</p>
+<h3>9.7 清理策略</h3>
+<p>默认保留最近 7 天，点击在 3 / 7 / 14 天之间循环，上限 14 天。只清理 <code>cache</code> 下超过天数的文件，不碰素材和草稿。</p>
+<h3>9.8 用户手册与操作指南</h3>
+<p>“缓存与草稿”卡片下方有两个独立按钮：<strong>用户手册</strong>打开本手册，<strong>操作指南</strong>打开从导入到出片的快速步骤。两份文档随程序分发，用默认浏览器打开，不依赖 Word。</p>
+</section>
+
+<section class="card" id="s10">
+<h2><span class="num">10</span>键盘快捷键</h2>
+<table>
+<tr><th>快捷键</th><th>功能</th><th>适用范围</th></tr>
+<tr><td>Ctrl + 1 … 5</td><td>切换五个主页面</td><td>全局</td></tr>
+<tr><td>Ctrl + I</td><td>导入素材</td><td>素材库</td></tr>
+<tr><td>Ctrl + R</td><td>运行全流程</td><td>任务中心 / 参数页</td></tr>
+<tr><td>Ctrl + S</td><td>保存工程；已保存过则更新当前工程</td><td>全局</td></tr>
+<tr><td>Ctrl + O</td><td>打开工程</td><td>全局</td></tr>
+<tr><td>Ctrl + N</td><td>新建工程</td><td>全局</td></tr>
+<tr><td>Ctrl + Z</td><td>撤销上一步</td><td>工程编辑</td></tr>
+<tr><td>Ctrl + Y</td><td>恢复撤销</td><td>工程编辑</td></tr>
+<tr><td>Ctrl + Shift + Z</td><td>恢复撤销（备用）</td><td>工程编辑</td></tr>
+<tr><td>Space</td><td>播放 / 暂停</td><td>素材预览</td></tr>
+<tr><td>P</td><td>进入 / 退出全屏</td><td>素材预览</td></tr>
+<tr><td>Esc</td><td>退出全屏或关闭当前浮层</td><td>全局</td></tr>
+</table>
+<p>快捷键以 <code>main.py</code> 的实际绑定为准。某些输入框获得焦点时，字母键可能被输入框接管，先点回预览区再按。</p>
+</section>
+
+<section class="card" id="s11">
+<h2><span class="num">11</span>代理、解码与性能</h2>
+<h3>11.1 为什么 4K 10-bit 4:2:2 会卡</h3>
+<p>这类素材的软件解码、缩放和 10-bit 转换都落在 CPU。即使显卡支持 NVENC，NVENC 只负责编码，不承担整条解码链。预览窗口同时播放原片时，解码线程会被占满，表现就是慢放、掉帧或全屏无响应。</p>
+<h3>11.2 代理规格</h3>
+<p>HEVC Main10、<code>yuv420p10le</code>、目标高度 960；4K 16:9 输出约 <code>1706×960</code>；保持原帧率和时长，音轨 AAC 192k，GOP 12。</p>
+<h3>11.3 编码器探测与降级</h3>
+<p>程序启动代理任务时先真实试编码：NVENC 可用则用硬件编码，不可用则尝试 QSV、AMF，最后退回 libx265。编码器不可用不会让任务失败，而是自动降级。</p>
+<h3>11.4 缓存</h3>
+<p>代理文件按原片路径与指纹建立 JSON 索引；源文件变化或代理版本升级会让旧代理失效。代理任务支持重复生成检查，已存在的有效代理不会重复转码。</p>
+<h3>11.5 三路解码</h3>
+<p>同时发生“AI 分析抽帧 + 预览原片 + 代理生成”时，三路解码会争抢 CPU。软件不会自动阻止分析时预览原片；建议暂停分析，或只预览已经生成代理的素材。</p>
+<h3>11.6 Qt 与 HEVC Main10</h3>
+<p>当前打包环境为 Qt 6.12，已验证 HEVC Main10 代理可正常播放。若代理仍无法播放，先确认代理文件存在且 ffprobe 能读出编码，再检查系统解码组件。</p>
+<h3>11.7 硬件建议</h3>
+<ul>
+<li>4K 10-bit 4:2:2 素材：优先 960p 代理，避免同时跑分析与原片预览。</li>
+<li>CPU 10 核以上、32 GB 内存更适合批量分析。</li>
+<li>代理缓存单独放一块读写稳定的 SSD。</li>
+<li>不要为了追求“全原片预览”关闭代理后再批量分析。</li>
+</ul>
+<h3>11.8 排查表</h3>
+<table>
+<tr><th>现象</th><th>优先检查</th><th>处理</th></tr>
+<tr><td>预览像慢放</td><td>原片编码、是否 10-bit 4:2:2</td><td>切 960p 代理，等当前素材就绪</td></tr>
+<tr><td>全屏卡死</td><td>是否同时分析、代理是否生成中</td><td>退出全屏，暂停分析，改用代理</td></tr>
+<tr><td>代理一直不出现</td><td>代理队列、缓存目录权限</td><td>看日志与 <code>cache/proxy</code></td></tr>
+<tr><td>CPU 100%</td><td>是否三路解码并发</td><td>减少并发，等待代理完成</td></tr>
+</table>
+</section>
+
+<section class="card" id="s12">
+<h2><span class="num">12</span>常见问题与故障排除</h2>
+<h3>12.1 启动与安装</h3>
+<p><strong>双击无反应：</strong>确认是 64 位 Windows；查看安装目录是否完整；被杀毒软件拦截时先加白名单。<br>
+<strong>提示缺少 DLL：</strong>不要单独拷 exe，使用完整安装包；安装版的运行库在程序目录内。</p>
+<h3>12.2 素材库</h3>
+<p><strong>导入后没有画面：</strong>先检查文件是否可播放，再看日志里的解码错误。<br>
+<strong>只选一个却分析了全部：</strong>见 4.5，确认勾选和当前文件夹。<br>
+<strong>移除后原片还在：</strong>这是设计行为，移除只删库内引用。</p>
+<h3>12.3 预览与播放</h3>
+<p><strong>有声音没画面：</strong>切换代理档位，确认当前素材代理完成。<br>
+<strong>全屏不能用：</strong>先在窗口模式确认能播放；全屏卡顿时暂停后台任务。<br>
+<strong>预览卡但导出正常：</strong>代理只影响预览，导出仍用原片。</p>
+<h3>12.4 AI 分析</h3>
+<p><strong>分析页不能开始：</strong>分析只能从素材库“分析选中”启动。<br>
+<strong>进度不动：</strong>看是否暂停、是否素材不可读、是否磁盘写满。<br>
+<strong>片段重复：</strong>切换更严格的重复度，或先清理重复素材。</p>
+<h3>12.5 参数与任务</h3>
+<p><strong>点“取消”后参数没变：</strong>取消的是任务，不是参数；恢复默认用“恢复默认”。<br>
+<strong>任务卡在渲染：</strong>看 FFmpeg 日志、磁盘空间和素材路径。<br>
+<strong>没有生成草稿：</strong>确认草稿目录可写，剪映没有占用同名工程。</p>
+<h3>12.6 工程</h3>
+<p><strong>打开工程后空白：</strong>确认版本和文件完整性，尝试 <code>.bak</code>。<br>
+<strong>素材丢失：</strong>路径变化或素材被移动；重新定位后再保存。</p>
+<h3>12.7 剪映</h3>
+<p><strong>草稿列表没有新工程：</strong>设置页确认草稿目录；任务中心打开输出目录；重启剪映刷新列表。<br>
+<strong>草稿能打开但缺素材：</strong>草稿引用原路径，素材被移动后需要重新链接。</p>
+<h3>12.8 设置与缓存</h3>
+<p><strong>缓存占满磁盘：</strong>把清理策略改为 3 天，或手动清理 <code>cache</code>；不要删素材目录。<br>
+<strong>设置不保存：</strong>检查配置目录写权限；安装目录不可写时程序会回退到用户目录。</p>
+<h3>12.9 可选组件</h3>
+<p>OpenCLIP 模型用于语义能力，缺失时相关功能不可用，但不影响基础分析。安装包不包含工程根下的 OpenCLIP 目录；需要时按程序提示单独放置。</p>
+<h3>12.10 信息收集清单</h3>
+<p>反馈问题请附：Windows 版本、显卡与驱动、素材编码与分辨率、复现步骤、任务中心日志、是否使用代理、工程文件版本。不要只发一张报错截图。</p>
+</section>
+
+<section class="card" id="s13">
+<h2><span class="num">13</span>典型工作流</h2>
+<h3>13.1 快速出 30 秒</h3>
+<ol>
+<li>导入 10–20 条素材，建一个文件夹。</li>
+<li>快速分析，等统计卡片出现可用片段。</li>
+<li>参数设 30 秒、1 个版本、片段 1.5–3 秒。</li>
+<li>任务中心启动，完成后到剪映检查。</li>
+</ol>
+<h3>13.2 4K 高质量</h3>
+<ol>
+<li>先给素材生成 960p 代理，确认预览流畅。</li>
+<li>严格分析，避免同时预览原片。</li>
+<li>提高重复度约束，片段 2–4 秒，开卡点。</li>
+<li>生成 1 个版本，逐段检查后再批量。</li>
+</ol>
+<h3>13.3 多版本</h3>
+<p>先用 1 个版本验证参数，再改成 3–5 个版本排队。版本之间共享素材与分析结果，不重复分析。</p>
+<h3>13.4 精筛</h3>
+<p>在分析页右键排除不可用片段，再回参数页收紧时长和评分。精筛后片段数变少是正常的，不要为了凑时长放宽到废片。</p>
+<h3>13.5 归档与换机</h3>
+<p>保存工程，记录素材根目录；把工程和素材一起迁移，保持路径；打开后先检查素材有效性再继续任务。</p>
+<h3>13.6 出片检查</h3>
+<p>检查片头片尾、重复镜头、黑帧、音量突变、字幕位置和总时长。MixCut 生成的是草稿，最终导出前仍要人工确认。</p>
+</section>
+
+<section class="card" id="s14">
+<h2><span class="num">14</span>附录</h2>
+<h3>14.1 快捷键总表</h3>
+<p>见第 10 章。工程相关快捷键在输入框聚焦时可能失效，先点回工作区。</p>
+<h3>14.2 默认值</h3>
+<table>
+<tr><th>项目</th><th>默认</th></tr>
+<tr><td>分析模式</td><td>中度分析（6 帧 / 0.5）</td></tr>
+<tr><td>代理档位</td><td>代理关闭</td></tr>
+<tr><td>缓存清理</td><td>保留 7 天</td></tr>
+<tr><td>主题</td><td>石墨深色</td></tr>
+<tr><td>草稿目录</td><td>自动探测剪映草稿目录</td></tr>
+</table>
+<h3>14.3 文件与目录</h3>
+<table>
+<tr><th>路径</th><th>内容</th></tr>
+<tr><td><code>cache</code></td><td>缓存与临时文件</td></tr>
+<tr><td><code>cache/proxy</code></td><td>代理视频与索引</td></tr>
+<tr><td><code>config</code></td><td>界面与运行配置</td></tr>
+<tr><td><code>docs</code></td><td>用户手册与操作指南</td></tr>
+<tr><td><code>*.mixcut</code></td><td>工程文件，JSON，version 3</td></tr>
+</table>
+<h3>14.4 可选组件</h3>
+<p>OpenCLIP 模型、额外解码组件等属于可选能力；缺失时程序应降级而不是崩溃。安装包自带的 FFmpeg 与 ffprobe 位于程序目录。</p>
+<h3>14.5 术语</h3>
+<table>
+<tr><th>术语</th><th>含义</th></tr>
+<tr><td>代理</td><td>低码率、低分辨率的预览替身，不参与最终输出</td></tr>
+<tr><td>片段</td><td>分析后得到的候选镜头区间</td></tr>
+<tr><td>判废</td><td>因质量或规则被排除的片段</td></tr>
+<tr><td>草稿</td><td>写入剪映工程目录的可编辑时间线</td></tr>
+<tr><td>硬切 / 叠化</td><td>无转场切换 / 交叉淡化转场</td></tr>
+</table>
+<h3>14.6 支持格式</h3>
+<p>以程序内置 FFmpeg 能解码为准。常见 H.264、HEVC、ProRes 可导入；10-bit 4:2:2 建议使用代理预览。</p>
+<h3>14.7 版本说明</h3>
+<p>本手册对应 MixCut Studio 1.0.0。界面与参数以当前程序为准；旧版 README 的页面结构已过时，不要按旧文档操作。</p>
+</section>
+
+<div class="footer">MixCut Studio 用户手册 · 随程序分发的本地文档 · 可用浏览器打开或打印</div>
+</main>
+</div>
+</body>
+</html>

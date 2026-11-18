@@ -1,0 +1,17 @@
+PySide6==6.12
+PyInstaller==6.17
+pyJianYingDraft==0.3.1
+librosa==1.0.0
+soundfile==0.14.0
+
+# TransNetV2 高阶镜头切变（PyTorch 实现，自带权重，CPU 即可运行）
+# 它会连带安装 torch；若想减小体积，按下面方式先装 CPU 版再装本包：
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install transnetv2-pytorch==1.0.5
+transnetv2-pytorch==1.0.5
+
+# 智能粗剪筛选引擎的其它检测组件（缺任一项时，引擎自检会标记“未安装”并在任务里跳过）
+# ffmpeg 由项目根目录自带的 ffmpeg-20200831-4a11a6f-win64-static\bin 提供，无需 pip 安装
+# amverge
+# scenedetect
+# videoscope

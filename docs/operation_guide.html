@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MixCut Studio 操作指南</title>
+<style>
+:root{
+  --bg:#f4f7f7;--panel:#fff;--ink:#1e2b31;--muted:#61727b;--line:#dce5e7;
+  --accent:#156d63;--accent-2:#2c8d7f;--soft:#e8f4f1;--warn:#fff3e8;--warnline:#efd0b4;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.8 "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.hero{background:linear-gradient(135deg,#132127,#20343a 55%,#174f48);color:#f4f8f8;padding:56px 6vw 46px}
+.hero .kicker{font-size:12px;letter-spacing:.18em;color:#a9cec8}
+.hero h1{font-size:39px;margin:11px 0 10px;line-height:1.25}
+.hero p{max-width:820px;margin:0;color:#d1e0e2;font-size:16px}
+.hero .meta{margin-top:22px;display:flex;gap:10px;flex-wrap:wrap}
+.hero .meta span{border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:5px 12px;font-size:12px}
+.wrap{max-width:1080px;margin:0 auto;padding:32px 20px 72px}
+.intro{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:18px}
+.intro strong{color:var(--accent)}
+.pipeline{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:16px 0 4px}
+.pipeline div{background:var(--soft);border:1px solid #cfe5df;border-radius:9px;padding:10px 8px;text-align:center;font-size:13px;color:#255a52}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin:0 0 16px;box-shadow:0 8px 22px rgba(20,35,40,.035)}
+.step-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:8px}
+.step-no{flex:0 0 38px;height:38px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}
+.step h2{font-size:23px;line-height:1.35;margin:2px 0 0}
+.step .sub{color:var(--muted);font-size:13px;margin-top:4px}
+h3{font-size:16px;margin:20px 0 6px;color:#24424a}
+p{margin:8px 0}
+ul,ol{padding-left:24px;margin:8px 0}
+li{margin:4px 0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}
+th{background:#edf3f3}
+tbody tr:nth-child(even){background:#fbfcfc}
+.note,.warn,.tip{border-radius:8px;padding:11px 15px;margin:13px 0;font-size:14px}
+.note{background:#f4f8f8;border:1px solid var(--line)}
+.warn{background:var(--warn);border:1px solid var(--warnline);color:#68401f}
+.tip{background:#edf8f4;border:1px solid #cbe7dd;color:#21594c}
+.note strong,.warn strong,.tip strong{display:block;margin-bottom:3px;font-size:13px}
+code{background:#f0f5f5;border:1px solid #e0e9ea;border-radius:4px;padding:1px 5px;font-family:Consolas,"Courier New",monospace;font-size:13px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{background:#f8fbfb;border:1px solid var(--line);border-radius:9px;padding:13px 15px}
+.card h4{margin:0 0 5px;font-size:14px;color:var(--accent)}
+.card p{margin:0;font-size:13.5px;color:#4b5e68}
+.check{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:16px}
+.check h2{font-size:22px;margin:0 0 8px}
+.check ul{columns:2;column-gap:32px}
+.check li{break-inside:avoid}
+.footer{text-align:center;color:#7b8b93;font-size:12.5px;margin-top:24px}
+@media(max-width:800px){
+  .hero{padding:38px 20px}.hero h1{font-size:31px}
+  .wrap{padding:20px 14px 56px}.step{padding:22px 18px}
+  .pipeline{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.check ul{columns:1}
+}
+@media print{
+  body{background:#fff;font-size:12pt}
+  .hero{background:#fff;color:#111;border-bottom:2px solid #222}
+  .hero p,.hero .kicker,.hero .meta span{color:#333}
+  .step,.intro,.check{box-shadow:none;border:0;padding:0;margin-bottom:16px}
+  h2{page-break-after:avoid}
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="kicker">MixCut Studio · Quick Start</div>
+  <h1>操作指南</h1>
+  <p>从导入素材到在剪映里打开草稿的完整操作路径。本文只讲“怎么做”；参数含义、代理原理和故障排查的完整说明见随程序提供的《用户手册》。</p>
+  <div class="meta"><span>版本 1.0.0</span><span>约 10–20 分钟跑通</span><span>随程序分发</span></div>
+</header>
+
+<div class="wrap">
+<section class="intro">
+  <p><strong>开始前先确认三件事：</strong>素材能正常播放；剪映已安装并能打开草稿目录；磁盘至少留出素材体积 1–2 倍的缓存空间。</p>
+  <div class="pipeline">
+    <div>1 导入素材</div><div>2 分析镜头</div><div>3 设置参数</div><div>4 生成草稿</div><div>5 剪映精修</div>
+  </div>
+  <div class="tip"><strong>第一次使用</strong>先跑一条 30 秒、1 个版本的短片，确认整条链路正常，再增加素材和版本数。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">1</div><div><h2>导入素材并建分类</h2><div class="sub">素材库 · Ctrl+I</div></div></div>
+<p>打开“素材库”，点“导入素材”。可以一次选多个视频，也可以选择整个文件夹让程序扫描。</p>
+<ol>
+<li>导入后等待缩略图和元数据出现，确认没有“不可读”标记。</li>
+<li>建议按项目或拍摄日期新建文件夹，把本次要用的素材放进去。</li>
+<li>文件夹是库内分类，不会移动磁盘文件；删除文件夹后素材会回到“全部素材”。</li>
+</ol>
+<div class="warn"><strong>不要先勾选全部</strong>如果只想分析一个文件夹，先点进该文件夹，不要停留在“全部素材”再随手勾选，避免分析范围超出预期。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">2</div><div><h2>先预览，决定要不要代理</h2><div class="sub">素材预览 · Space 播放 / P 全屏</div></div></div>
+<p>在素材条上点一条素材，按 <code>Space</code> 播放，按 <code>P</code> 全屏。重点看画面是否正常、声音是否出来、有没有坏帧。</p>
+<h3>4K 10-bit 4:2:2 素材</h3>
+<p>如果预览像慢放、掉帧，或全屏卡住，在预览区右上角把代理切到 <code>960p</code>。选择后程序会为素材库里全部视频排队生成代理，等当前素材代理就绪后会自动换源。</p>
+<table>
+<tr><th>素材情况</th><th>建议</th></tr>
+<tr><td>1080p H.264，播放正常</td><td>代理关闭</td></tr>
+<tr><td>4K HEVC，轻微卡顿</td><td>960p</td></tr>
+<tr><td>4K ProRes / 10-bit 4:2:2</td><td>960p，等代理完成再分析</td></tr>
+<tr><td>老机器快速浏览</td><td>720p</td></tr>
+</table>
+<div class="note"><strong>代理只影响预览</strong>草稿和最终输出仍然使用原片，不会因为选了代理而降低成片画质。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">3</div><div><h2>从素材库启动分析</h2><div class="sub">AI 分析 · 入口只在素材库“分析选中”</div></div></div>
+<p>回到素材库，勾选本次要分析的素材，点“分析选中”。分析页本身没有“开始分析”按钮，只提供暂停/继续和停止。</p>
+<ol>
+<li>第一次建议用<strong>中度分析</strong>（默认，6 帧 / 0.5）。</li>
+<li>长素材初筛可用<strong>快速分析</strong>；关键镜头再切<strong>严格分析</strong>补做。</li>
+<li>分析期间不要同时预览 4K 原片；需要看素材时先看代理。</li>
+<li>等统计卡片出现可用片段数，再进入下一步。</li>
+</ol>
+<div class="warn"><strong>“只选一个却分析了全部”</strong>检查勾选是否真的生效；没有勾选时程序会退回当前文件夹，在“全部素材”下就是全部未移除素材。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">4</div><div><h2>设置混剪参数</h2><div class="sub">参数设置 · 先少后多</div></div></div>
+<p>按下面的起步组合填写，先保证能出片，再逐项调整。</p>
+<table>
+<tr><th>参数</th><th>起步值</th><th>说明</th></tr>
+<tr><td>成片时长</td><td>30 秒</td><td>先短后长，便于检查</td></tr>
+<tr><td>版本数</td><td>1</td><td>验证后再批量</td></tr>
+<tr><td>片段时长</td><td>1.5–4 秒</td><td>短视频节奏</td></tr>
+<tr><td>重复度</td><td>中高</td><td>避免同一镜头反复出现</td></tr>
+<tr><td>卡点</td><td>关闭</td><td>先跑通普通切点</td></tr>
+<tr><td>转场</td><td>默认</td><td>短镜头和黑名单关键词会硬切</td></tr>
+</table>
+<h3>精筛片段</h3>
+<p>在 AI 分析页右键片段可“加入”或“排除”。排除后回到参数页，片段数会减少，这是正常现象。</p>
+<div class="note"><strong>“取消”不是恢复默认</strong>参数页的“取消”用于终止正在运行的任务；恢复默认请点“恢复默认”。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">5</div><div><h2>启动任务并看四个阶段</h2><div class="sub">任务中心 · Ctrl+R</div></div></div>
+<p>在任务中心或参数页启动全流程。任务会依次经过：</p>
+<ol>
+<li><strong>准备素材：</strong>检查素材路径、分析结果和可用性。</li>
+<li><strong>生成时间线：</strong>按参数筛选片段、排顺序、对卡点。</li>
+<li><strong>渲染片段：</strong>生成草稿需要的片段和转场。</li>
+<li><strong>写入草稿：</strong>写入剪映草稿目录。</li>
+</ol>
+<p>进度卡住时先看日志第一条错误，不要只看“失败”。磁盘满、素材被移动、草稿目录被剪映占用，是最常见的三类原因。</p>
+<div class="tip"><strong>多版本</strong>任务会排队顺序执行；确认第一条草稿没问题，再让后续版本继续。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">6</div><div><h2>到剪映打开草稿</h2><div class="sub">剪映专业版 · 草稿列表</div></div></div>
+<ol>
+<li>任务完成后记下输出区给出的草稿名称与路径。</li>
+<li>打开剪映，在草稿列表里找到同名工程。</li>
+<li>没有出现时，回设置页确认“草稿目录”，再点任务中心“打开输出目录”。</li>
+<li>逐段检查片头、片尾、重复镜头、黑帧、音量与总时长。</li>
+</ol>
+<div class="note"><strong>草稿不是成片</strong>MixCut 生成可编辑时间线；调色、字幕、片头包装和最终导出仍在剪映完成。</div>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">7</div><div><h2>保存工程，方便下次继续</h2><div class="sub">Ctrl+S / Ctrl+O</div></div></div>
+<p>参数调好后按 <code>Ctrl+S</code> 保存工程。已经保存过的工程会直接更新当前文件，并保留 <code>.bak</code> 备份。</p>
+<p>工程保存素材路径、分类、分析结果和参数，不内嵌视频。换机或移动素材后，先确认原路径可访问，再打开工程。</p>
+<div class="warn"><strong>不要只拷工程文件</strong>素材不在工程里；迁移时工程和素材要一起走，并尽量保持绝对路径。</div>
+</section>
+
+<section class="check">
+<h2>出片前检查清单</h2>
+<ul>
+<li>素材没有缺失标记</li>
+<li>分析已完成，片段数足够</li>
+<li>代理只用于预览，输出仍是原片</li>
+<li>时长和版本数符合预期</li>
+<li>重复镜头已排除</li>
+<li>配乐音量没有削波</li>
+<li>草稿目录可写</li>
+<li>剪映能正常打开草稿</li>
+</ul>
+</section>
+
+<section class="step">
+<div class="step-head"><div class="step-no">8</div><div><h2>常见问题速查</h2><div class="sub">先按这里处理，仍无法解决再看用户手册第 12 章</div></div></div>
+<table>
+<tr><th>现象</th><th>先做什么</th></tr>
+<tr><td>预览像慢放</td><td>切 960p 代理，等当前素材代理完成</td></tr>
+<tr><td>全屏卡住</td><td>退出全屏，暂停分析，改用代理预览</td></tr>
+<tr><td>只选一条却分析全部</td><td>检查勾选状态和当前文件夹</td></tr>
+<tr><td>任务卡在渲染</td><td>看日志、磁盘空间、素材路径</td></tr>
+<tr><td>剪映没有新草稿</td><td>确认草稿目录，重启剪映刷新列表</td></tr>
+<tr><td>打开工程是空白</td><td>确认文件完整，尝试同目录 <code>.bak</code></td></tr>
+<tr><td>设置页找不到手册</td><td>点“用户手册”或“操作指南”，文档随程序分发</td></tr>
+</table>
+</section>
+
+<section class="intro">
+<h2 style="font-size:22px;margin:0 0 8px">需要更完整的说明</h2>
+<p>打开设置页“缓存与草稿”卡片下方的<strong>用户手册</strong>按钮，查看每个页面的入口、参数含义、代理规格、快捷键、性能排查和典型工作流。</p>
+<p><a href="user_manual.html">直接打开用户手册</a></p>
+</section>
+
+<div class="footer">MixCut Studio 操作指南 · 随程序分发的本地文档 · 可用浏览器打开或打印</div>
+</div>
+</body>
+</html>
