@@ -11,6 +11,8 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
+from . import frame_pipe
+
 
 @dataclass
 class ShotQuality:
@@ -59,58 +61,61 @@ class BadShotDetector:
     ) -> List[ShotQuality]:
         """按固定窗口分析整条视频，返回每个窗口的独立评分。
 
-        默认每 5 秒取 3 帧。采样点位于窗口内部，避免只采到窗口边缘。
+        优化点：不再用 cv2 随机 seek 逐帧取画面，而是交给 ffmpeg 顺序解码一次、
+        边解边按目标帧率抽帧（见 frame_pipe）。默认每 5 秒 3 帧等于 0.6fps，
+        与原先窗口内等距采样等价，但避免了每条素材被重复解码几十遍。
         """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
+        meta = frame_pipe.probe_media(video_path)
+        if not meta:
+            self.shots = []
+            return []
+        _, _, duration = meta
+        if duration <= 0:
             self.shots = []
             return []
 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        if total_frames <= 0 or fps <= 0:
-            cap.release()
-            self.shots = []
-            return []
-
-        duration = total_frames / fps
         window = max(0.5, float(segment_duration or 5.0))
         sample_count = max(1, int(sample_count_per_segment or 3))
+        sample_fps = sample_count / window
         window_count = max(1, int(np.ceil(duration / window)))
-        results: List[ShotQuality] = []
 
-        for window_index in range(window_count):
-            if cancel_check and cancel_check():
-                break
-            start = window_index * window
-            end = min(duration, start + window)
-            if end <= start:
-                continue
+        buckets: List[List[ShotQuality]] = [[] for _ in range(window_count)]
+        previous_gray = None
+        processed = 0
 
-            # 使用窗口内部等距采样；单帧窗口也可工作。
-            offsets = np.linspace(0.15, 0.85, sample_count)
-            timestamps = [start + (end - start) * float(x) for x in offsets]
-            frame_results = []
-            previous_gray = None
-
-            for timestamp in timestamps:
-                frame_index = min(total_frames - 1, max(0, int(round(timestamp * fps))))
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                ok, frame = cap.read()
-                if not ok or frame is None:
+        try:
+            for timestamp, frame in frame_pipe.iter_frames(
+                video_path,
+                fps=sample_fps,
+                max_side=self.MAX_FRAME_SIDE,
+            ):
+                if cancel_check and cancel_check():
+                    break
+                index = int(timestamp // window)
+                if index < 0 or index >= window_count:
                     continue
                 q, gray = self._eval_frame(frame, previous_gray)
-                frame_results.append(q)
                 previous_gray = gray
+                buckets[index].append(q)
+                processed += 1
+                if progress_cb and processed % max(1, sample_count) == 0:
+                    done = min(window_count, index + 1)
+                    progress_cb(done, window_count, f"画面质量评估 {done}/{window_count}")
+        except Exception:
+            # 单条素材解码异常不应该炸掉整批分析，保留已采集到的部分。
+            pass
 
-            if frame_results:
-                results.append(self._aggregate_window(start, end, frame_results))
+        results: List[ShotQuality] = []
+        for window_index, frame_results in enumerate(buckets):
+            if not frame_results:
+                continue
+            start = window_index * window
+            end = min(duration, start + window)
+            results.append(self._aggregate_window(start, end, frame_results))
 
-            if progress_cb:
-                progress_cb(window_index + 1, window_count,
-                            f"画面质量评估 {window_index + 1}/{window_count}")
+        if progress_cb:
+            progress_cb(window_count, window_count, f"画面质量评估 {window_count}/{window_count}")
 
-        cap.release()
         self.shots = results
         return results
 

@@ -64,27 +64,37 @@ ANIM_HOVER = 140
 ANIM_PANEL = 180
 
 
-def _load_bundled_font():
-    """加载打包在 ui/fonts/ 里的微软雅黑 ttf，返回 family name。"""
-    import os
+def _preferred_font_family():
+    """返回当前系统可用的首选中文界面字体。
+
+    说明（重要）：本项目**不再自带字体文件**。
+    · 微软雅黑是微软的商业字体，不适合随开源仓库分发；
+    · 界面一直使用的是系统字体 ``Microsoft YaHei``（见 FONT_FAMILY），
+      以前那个 ``fonts/msyh.ttf`` 与加载函数其实从未被调用过；
+    · 若某些精简系统缺少雅黑，这里会依次回退到其它常见中文字体。
+    """
     from PySide6.QtGui import QFontDatabase
-    font_path = os.path.join(os.path.dirname(__file__), "fonts", "msyh.ttf")
-    if not os.path.isfile(font_path):
+    candidates = [FONT_FAMILY, "Microsoft YaHei UI", "Microsoft YaHei",
+                  "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC",
+                  "SimHei", "SimSun", FONT_FALLBACK]
+    try:
+        available = set(QFontDatabase.families())
+    except Exception:
         return FONT_FAMILY
-    font_id = QFontDatabase.addApplicationFont(font_path)
-    if font_id < 0:
-        return FONT_FAMILY
-    families = QFontDatabase.applicationFontFamilies(font_id)
-    return families[0] if families else FONT_FAMILY
+    for name in candidates:
+        if name and name in available:
+            return name
+    return FONT_FAMILY
 
 
 def apply(app):
     """把主题 QSS 应用到整个应用。"""
     # demo 风格优先使用系统 Segoe UI Variable Display；
-    # 中文自动回退到 Microsoft YaHei UI，不再强制加载旧版雅黑。
+    # 中文自动回退到 Microsoft YaHei UI，不依赖随包字体文件。
     app.setStyleSheet(build_qss())
+    family = _preferred_font_family()
     font = app.font()
-    font.setFamilies([FONT_FAMILY, "Microsoft YaHei UI", FONT_FALLBACK])
+    font.setFamilies([family, "Microsoft YaHei UI", FONT_FALLBACK])
     font.setPointSize(FONT_SIZE)
     app.setFont(font)
 

@@ -6,11 +6,11 @@
 # ---------- 大体积依赖与运行时（绝对不能提交） ----------
 # OpenCLIP 模型权重（约 1.7GB）与 venv（约 3GB）
 OpenCLIP/
+# 自研引擎：可执行文件、CUDA/NPP 动态库、模型权重（约 2.2GB）
+engine/
 # ffmpeg / ffprobe 可执行文件（约 434MB）
 ffmpeg/
 ffmpeg-*/
-# CUDA / 推理引擎
-engine/
 # 分析缓存与代理缓存（约 2.3GB）
 cache/
 .preview_proxy/
@@ -72,11 +72,12 @@ pip-wheel-metadata/
 *.ai
 
 # ---------- 字体 ----------
-# 程序真正使用的是 mixcut/ui/fonts/msyh.ttf，必须保留。
-# 根目录下那个同名同内容的副本（e3d4fbdd...ttf）是打包遗留，不提交。
-/e3d4fbdd543aa8769ab201fcfda4b8da.ttf
-/e3d4fbdd*.ttf
-# 其它孤立字体一律不提交
+# 微软雅黑（msyh.ttf）是微软的商业字体，不适合公开分发。
+# 程序运行依靠系统自带的 "Microsoft YaHei"，不依赖这个文件；
+# 本地或打包时若确实需要自带字体，把它放进 mixcut/ui/fonts/ 即可（不进版本库）。
+mixcut/ui/fonts/*.ttf
+mixcut/ui/fonts/*.otf
+/e3d4fbdd*
 /*.ttf
 /*.otf
 
@@ -87,7 +88,7 @@ assets/*brand*
 # 程序图标必须保留
 !assets/app.png
 !assets/*.ico
-# 界面缩略图占位（体积大且是设计稿）不提交
+# 界面设计稿不提交
 assets/*.jpg
 assets/*.jpeg
 /*.png
@@ -95,7 +96,6 @@ assets/*.jpeg
 
 # ---------- 工程与个人数据 ----------
 *.mixcut
-# 用户编辑产生的自动保存
 *.autosave
 *.mixcut.bak
 
@@ -117,17 +117,15 @@ config/local.*
 *.key
 
 # ---------- 临时分析与诊断脚本（可重新生成） ----------
-tests/_crash_scan.py
-tests/_crash_scan.txt
-tests/_dead_code_scan.py
-tests/_dead_code_report.txt
-tests/_dead_code_verify.py
-tests/_dead_code_verify.txt
-tests/_perf_scan.py
-tests/_perf_report.txt
-tests/_size_scan.py
-tests/_size_report.txt
-tests/_grid_dump.txt
+tests/_*.py
+tests/_*.txt
+
+# ---------- 内存监控日志（运行时产生） ----------
+tools/mem_logs/
+tools/__pycache__/
+
+# ---------- 本地备份目录（供自己回滚，不进版本库） ----------
+_backup_*/
 
 # ---------- 归档与导出 ----------
 *.zip
@@ -138,9 +136,4 @@ tests/_grid_dump.txt
 bench_results/
 _verify_ui_*/
 *_便签取证_*/
-
-# ��ʱ�ļ�����ʷ��¼����
 _git_history_backup.txt
-tests/_*.txt
-tests/_*.py
-

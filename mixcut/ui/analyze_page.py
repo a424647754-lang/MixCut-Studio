@@ -17,16 +17,17 @@ import hashlib
 import logging
 import queue
 import threading
+from collections import OrderedDict
 
 import cv2
 import numpy as np
 
 from PySide6.QtCore import (
     Qt, QThread, Signal, QUrl, QEvent, QRectF, QPoint, Property, QEasingCurve,
-    QMimeData,
+    QMimeData, QSize,
 )
 from PySide6.QtGui import (
-    QColor, QPainter, QPen, QFont, QPixmap, QPainterPath, QDrag,
+    QColor, QPainter, QPen, QFont, QPixmap, QPainterPath, QDrag, QImageReader,
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -270,34 +271,190 @@ class AnalysisWorker(QThread):
             with self.cache.lock:
                 self._enqueue_missing_locked()
 
-            while not self._stop:
-                # 暂停：把当前片段放回队列，等继续/停止
-                if self._paused:
-                    self._gate.wait(0.25)
-                    continue
-                try:
-                    key = self._q.get(timeout=0.4)
-                except queue.Empty:
-                    if self._all_complete():
-                        self.finished_all.emit(self._snapshot())
-                        break
-                    with self.cache.lock:
-                        self._enqueue_missing_locked()
-                    continue
-
-                if self._paused:
-                    self._q.put(key)
-                    continue
-                with self.cache.lock:
-                    self._queued.discard(key)
-                self._process(key)
-
+            # ---- 唯一路径：顺序流式分析 ----
+            # 用 ffmpeg 一次解码整条视频、按目标采样率抽帧并缩放到 960，
+            # 边扫边按片段分桶评估。
+            # cv2 逐段路径（每段 grab 150 帧 4K 全尺寸再 retrieve）已移除：
+            # 实测同样素材下流式更快，而且不会把整张 4K 帧搬进 Python 内存。
+            self._run_streaming()
             self._close_cap()
             self.worker_stopped.emit()
         except Exception as e:
             self.error.emit(str(e))
             self._close_cap()
             self.worker_stopped.emit()
+
+    # -----------------------------------------------------
+    def _stream_supported(self):
+        """当前环境能否走顺序流式抽帧（需要 ffmpeg + frame_pipe）。
+
+        流式是唯一分析路径，ffmpeg 缺失时直接报错而不是回退到 cv2 逐段。
+        """
+        try:
+            from mixcut import frame_pipe
+        except Exception:
+            return False
+        try:
+            return bool(frame_pipe.find_ffmpeg())
+        except Exception:
+            return False
+
+    def _run_streaming(self):
+        """顺序流式分析：一次解码整条视频，边扫边分桶。"""
+        if not self._stream_supported():
+            raise RuntimeError(
+                "找不到 ffmpeg，无法进行顺序解码分析。"
+                "请确认程序目录下的 ffmpeg/bin/ 完整，或设置 MIXCUT_FFMPEG 环境变量。")
+        from mixcut import frame_pipe
+
+        # 按文件分组：同一文件的片段共享一次顺序扫描
+        by_path = {}
+        for entry in self._roster:
+            by_path.setdefault(entry["path"], []).append(entry)
+
+        total_segments = len(self._roster)
+        if total_segments == 0:
+            self.finished_all.emit(self._snapshot())
+            return True
+
+        # 每个文件需要哪些采样帧（按片段）
+        for path, entries in by_path.items():
+            if self._stop:
+                break
+            # 该文件是否有片段缺帧
+            pending = []
+            for entry in entries:
+                cv_frames = self._required_frames(entry)
+                if any(self._frame_cache_key(entry, f) not in self.cache.cv_cache
+                       for f in cv_frames):
+                    pending.append(entry)
+            if not pending:
+                continue
+
+            name = entries[0]["name"]
+            # 段长：相邻片段起点的差（通常 5 秒）
+            seg_dur = 5.0
+            if len(entries) > 1:
+                seg_dur = max(0.5, float(entries[1]["seg_start"] - entries[0]["seg_start"]))
+            elif entries:
+                seg_dur = max(0.5, float(entries[0]["seg_end"] - entries[0]["seg_start"]))
+            sample_count = len(self._cv_ratios())
+            sample_fps = max(0.05, sample_count / seg_dur)
+
+            # 以“相对时间点”方式给每帧归档到片段
+            # 段 k 覆盖 [k*seg_dur, (k+1)*seg_dur)
+            entries_by_index = {e["seg_index"]: e for e in entries}
+            buckets = {e["seg_index"]: [] for e in pending}
+
+            self.progress.emit(
+                0, total_segments, f"顺序解码 {name}（每 {seg_dur:.0f} 秒 {sample_count} 帧）…")
+
+            frame_no = 0
+            ok_any = True
+            try:
+                for ts, frame in frame_pipe.iter_frames(
+                        path, fps=sample_fps,
+                        max_side=self.detector.MAX_FRAME_SIDE):
+                    if self._stop:
+                        ok_any = False
+                        break
+                    while self._paused:
+                        self._gate.wait(0.25)
+                        if self._stop:
+                            ok_any = False
+                            break
+                    if not ok_any:
+                        break
+                    frame_no += 1
+                    # 按时间戳定位所属片段：片段区间是 [seg_start, seg_end)
+                    # 不能用 int(ts // seg_dur) 推算，因为段边界可能不是
+                    # seg_dur 的整数倍（末段还会被截短），会错配到相邻片段。
+                    idx = None
+                    for _e in entries:
+                        if _e["seg_start"] - 1e-6 <= ts < _e["seg_end"] - 1e-6:
+                            idx = _e["seg_index"]
+                            break
+                    if idx is None:
+                        # 落在末段边界外（浮点误差）时，归到最后一段
+                        if entries and abs(ts - entries[-1]["seg_end"]) < 0.2:
+                            idx = entries[-1]["seg_index"]
+                        else:
+                            continue
+                    if idx not in buckets:
+                        continue
+                    buckets[idx].append((ts, frame))
+                    if frame_no % 30 == 0:
+                        self.progress.emit(
+                            self._done_count, total_segments,
+                            f"{name} 解码中… 已抽 {frame_no} 帧")
+            except Exception as exc:
+                logger.debug("顺序解码失败 %s: %s", path, exc)
+                ok_any = False
+
+            # 分桶评估：每段的采样帧按比例取 sample_count 个
+            for seg_index in sorted(buckets):
+                if self._stop:
+                    break
+                frames = buckets[seg_index]
+                if not frames:
+                    continue
+                entry = entries_by_index[seg_index]
+                self._evaluate_stream_bucket(entry, frames, sample_count)
+                self._done_count += 1
+            # 释放本文件的帧桶，避免多文件时累积
+            buckets.clear()
+
+        if self._stop:
+            return True
+
+        # 全部完成
+        self.progress.emit(total_segments, total_segments, "分析完成")
+        self.finished_all.emit(self._snapshot())
+        return True
+
+    def _evaluate_stream_bucket(self, entry, frames, sample_count):
+        """用顺序流里采到的帧评估一个片段，结果写进 cv_cache。
+
+        ``frames`` 是 [(时间戳, BGR)]。这里按时间戳把抽到的帧映射到
+        ``_required_frames`` 计算出的目标帧号上：每个目标帧取时间上最接近的
+        采样帧来评估。这样 cv_cache 的键与原来逐段路径完全一致，
+        ``_assemble`` 读到的就是完整数据，不会出现大量评分为 0。
+        """
+        key = entry["key"]
+        cv_frames = self._required_frames(entry)
+        fps = float(entry.get("fps") or 30.0) or 30.0
+        if not frames or not cv_frames:
+            with self.cache.lock:
+                item = self._assemble(entry, cv_frames)
+                self._items[key] = item
+            self.item_updated.emit(item)
+            return
+
+        times = [float(t) for t, _f in frames]
+        prev_gray = None
+        for fidx in cv_frames:
+            if self._stop:
+                break
+            target_t = fidx / fps
+            # 找时间上最接近的采样帧
+            best = min(range(len(times)), key=lambda i: abs(times[i] - target_t))
+            frame = frames[best][1]
+            if frame is None:
+                continue
+            q, gray = self.detector._eval_frame(frame, prev_gray)
+            prev_gray = gray
+            cache_key = self._frame_cache_key(entry, fidx)
+            self.cache.cv_cache[cache_key] = {
+                "is_bad": q.is_bad, "reason": q.reason,
+                "sharpness": q.sharpness, "brightness": q.brightness,
+                "penalty": self.detector._bad_score(q)}
+        with self.cache.lock:
+            item = self._assemble(entry, cv_frames)
+            self._items[key] = item
+        self.item_updated.emit(item)
+        self.progress.emit(
+            self._done_count + 1, len(self._roster),
+            f"完成 {entry['name']} 片段{entry['seg_index']+1}")
 
     # -----------------------------------------------------
     def _build_roster(self):
@@ -589,25 +746,75 @@ class AnalysisWorker(QThread):
 
 WASTE_RED = "#F05A52"
 
-_PM_CACHE = {}
+# 缩略图缓存上限：超出后按最久未用淘汰。
+# 以前是无上限的全局字典，分析大素材时每张卡片都会往里面塞一份
+# QPixmap，片段一多内存就随进度持续上涨，最后把进程撑爆。
+_PM_CACHE = OrderedDict()
+_PM_CACHE_MAX = 240
+# 片段缩略图路径映射上限（key 是 frag_id，value 是 jpg 路径）
+_SEG_THUMB_MAX = 2000
+
+
+def _pm_cache_put(key, value):
+    """写入缩略图缓存，超过上限时淘汰最久未用的条目。"""
+    _PM_CACHE[key] = value
+    _PM_CACHE.move_to_end(key)
+    while len(_PM_CACHE) > _PM_CACHE_MAX:
+        _PM_CACHE.popitem(last=False)
 
 
 def _file_pixmap(path, w, h):
-    """按绝对路径读缩略图，缩放到卡片宽度（保持比例裁切）。"""
+    """按绝对路径读缩略图，缩放到卡片尺寸（保持比例裁切）。
+
+    关键：用 QImageReader 指定解码尺寸，而不是 QPixmap(path) 先加载原图
+    再缩放。原图是 4K 时，QPixmap 一次性要 24MB，每张卡片都这么来一次，
+    内存峰值会瞬间拉高；按目标尺寸解码只占几十 KB。
+    """
     if not path:
         return None
     key = (path, w, h)
-    if key in _PM_CACHE:
-        return _PM_CACHE[key]
-    pm = QPixmap(path)
-    if pm.isNull():
-        return None
-    pm = pm.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                   Qt.TransformationMode.SmoothTransformation)
-    pm = pm.copy(max(0, (pm.width() - w) // 2), max(0, (pm.height() - h) // 2),
-                 w, h)
-    _PM_CACHE[key] = pm
+    cached = _PM_CACHE.get(key)
+    if cached is not None:
+        _PM_CACHE.move_to_end(key)
+        return cached
+
+    pm = None
+    try:
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        src = reader.size()
+        if src.isValid() and src.width() > 0 and src.height() > 0:
+            # 按“填充目标框”的比例设置解码尺寸（等价于 KeepAspectRatioByExpanding）
+            sx = w / float(src.width())
+            sy = h / float(src.height())
+            scale = max(sx, sy)
+            tw = max(1, int(src.width() * scale + 0.5))
+            th = max(1, int(src.height() * scale + 0.5))
+            reader.setScaledSize(QSize(tw, th))
+        img = reader.read()
+        if not img.isNull():
+            pm = QPixmap.fromImage(img)
+    except Exception:
+        pm = None
+
+    if pm is None or pm.isNull():
+        # 兜底：老方式（个别格式 QImageReader 不认）
+        pm = QPixmap(str(path))
+        if pm.isNull():
+            return None
+        pm = pm.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                       Qt.TransformationMode.SmoothTransformation)
+
+    if pm.width() != w or pm.height() != h:
+        pm = pm.copy(max(0, (pm.width() - w) // 2),
+                     max(0, (pm.height() - h) // 2), w, h)
+    _pm_cache_put(key, pm)
     return pm
+
+
+def clear_pixmap_cache():
+    """清空缩略图缓存（重新分析/切换工程时调用，及时回收内存）。"""
+    _PM_CACHE.clear()
 
 
 class _SegmentThumbWorker(QThread):
@@ -1994,6 +2201,9 @@ class AnalyzePage(QWidget):
 
         # 复用持久缓存实例：已分析片段命中 cv cache，不重复计算
         self._reset_preview()
+        # 新一轮分析开始前清空缩略图缓存：上一批卡片的 QPixmap 已经没有用了，
+        # 留着只会和新卡片一起占内存（大素材分析时这是内存上涨的来源之一）。
+        clear_pixmap_cache()
         self._finished = False
         self.pause_btn.setText("暂停")
         self.pause_btn.setEnabled(True)
@@ -2102,6 +2312,10 @@ class AnalyzePage(QWidget):
         self._worker = None
         self._results = []
         self._finished = False
+        # 结果清空后缩略图缓存也没用了，一并释放。
+        clear_pixmap_cache()
+        self._seg_thumbs.clear()
+        self._thumb_pending.clear()
         self._pool_paths.clear()
         self._pool_frag_ids.clear()
         self._pool_last_scope = None
@@ -2246,6 +2460,9 @@ class AnalyzePage(QWidget):
     def _on_seg_thumb(self, key, jpg):
         self._seg_thumbs[key] = jpg
         self._thumb_pending.discard(key)
+        # 片段缩略图映射同样限流：数值是路径字符串，但片段量大时也要控制增长。
+        while len(self._seg_thumbs) > _SEG_THUMB_MAX:
+            self._seg_thumbs.pop(next(iter(self._seg_thumbs)))
         for row, card in self.cards.items():
             if row < len(self._results) and self._frag_key(self._results[row]) == key:
                 card.update()

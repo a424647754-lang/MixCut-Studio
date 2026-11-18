@@ -17,13 +17,26 @@ from . import timeline as tl
 
 DEFAULT_SR = 22050
 
+# 音频分块分析：每块处理的时长（秒）。
+# 以前是整段音频一次性解码进内存：3 小时 22050Hz 单声道约 950MB，
+# 加上 ffmpeg 管道字节串与 .copy() 的副本，峰值接近 2GB。
+# 现在按块解码、逐块分析，峰值只跟块大小有关，与音频总时长无关。
+CHUNK_SECONDS = 120.0
+# 单次允许分析的最长音频（秒）。超过这个长度直接拒绝，避免误喂超长文件。
+MAX_AUDIO_SECONDS = 3 * 3600.0
+# 整段分析（旧路径）允许的最大时长：短音频走整段结果更稳，长音频必须分块。
+DIRECT_LOAD_MAX_SECONDS = 300.0
+
 
 # ---------------------------------------------------------
 # 解码
 # ---------------------------------------------------------
 
 def load_mono(path, sr=DEFAULT_SR):
-    """用 ffmpeg 把任意媒体的音轨解码为单声道 float32 numpy 数组。"""
+    """用 ffmpeg 把任意媒体的音轨解码为单声道 float32 numpy 数组。
+
+    注意：这是**整段解码**接口，仅适合短音频。长音频请用 ``iter_mono_chunks``。
+    """
     ffmpeg = ft.find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("找不到 ffmpeg，无法解码音频。")
@@ -41,7 +54,63 @@ def load_mono(path, sr=DEFAULT_SR):
     if not proc.stdout:
         # 无音轨：返回空数组
         return np.zeros(0, dtype=np.float32)
-    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
+    # 直接复用字节缓冲，不再 .copy()（省掉一份整段副本）
+    arr = np.frombuffer(proc.stdout, dtype=np.float32)
+    return np.ascontiguousarray(arr)
+
+
+def iter_mono_chunks(path, chunk_seconds=CHUNK_SECONDS, sr=DEFAULT_SR,
+                     start_at=0.0):
+    """按块流式解码音频，逐块产出 (起始时间, float32 数组)。
+
+    通过 ffmpeg 的 ``-ss`` 跳转到起点、``-t`` 限制长度，每次只解一块；
+    内存峰值约等于 ``chunk_seconds × sr × 4`` 字节（120 秒约 10MB），
+    与音频总时长无关。
+
+    ``start_at``：从该时间点开始解码（秒）。
+    """
+    ffmpeg = ft.find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("找不到 ffmpeg，无法解码音频。")
+    start = max(0.0, float(start_at))
+    limit = start + MAX_AUDIO_SECONDS
+    while start < limit:
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-ss", "%.3f" % start,
+            "-t", "%.3f" % chunk_seconds,
+            "-i", str(path),
+            "-f", "f32le", "-ac", "1", "-ar", str(sr), "-",
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=ft.NO_WINDOW_FLAGS,
+        )
+        data = proc.stdout
+        if not data:
+            break
+        arr = np.frombuffer(data, dtype=np.float32)
+        if arr.size == 0:
+            break
+        yield start, np.ascontiguousarray(arr)
+        got = arr.size / float(sr)
+        # 解出来的块比请求的短 → 到文件末尾了
+        if got < chunk_seconds * 0.98:
+            break
+        start += got
+
+
+def probe_audio_duration(path):
+    """读取音频/视频的时长（秒）；取不到返回 0。"""
+    try:
+        dur = float(ft.probe_duration(str(path)) or 0.0)
+        if dur > 0:
+            return dur
+    except Exception:
+        pass
+    return 0.0
 
 
 # ---------------------------------------------------------
@@ -109,49 +178,127 @@ def _estimate_downbeats(y, sr, beat_times):
     return [round(beats[i], 4) for i in range(phase, len(beats), meter)]
 
 
-def analyze_bgm(path):
+def analyze_bgm(path, sr=DEFAULT_SR):
     """返回 BGM 的 BPM、鼓点时间列表与时长。
 
     ``downbeats`` 为估计的强拍（小节重拍）时间点，用于卡点时区分强弱拍；
     ``meter`` 为估计出的小节拍数（估计失败时为 0，downbeats 为空列表）。
     这两个字段是追加项，原有字段名称与含义不变。
+
+    **长音频自动走分块路径**：以前整段解码，3 小时音频要吃掉近 2GB 内存；
+    现在超过 ``DIRECT_LOAD_MAX_SECONDS`` 就按块解码、逐块取拍点再合并，
+    内存峰值只跟块大小有关。
     """
     import librosa
 
-    y, sr = librosa.load(path, sr=DEFAULT_SR, mono=True)
-    duration = len(y) / sr if sr else 0.0
+    total_duration = probe_audio_duration(path)
+    if total_duration > MAX_AUDIO_SECONDS:
+        raise RuntimeError(
+            "BGM 时长 %.1f 小时，超过单次分析上限 %.0f 小时。"
+            "请先裁剪成较短的音频再使用。"
+            % (total_duration / 3600.0, MAX_AUDIO_SECONDS / 3600.0))
 
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = float(np.atleast_1d(tempo)[0])
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr).tolist()
+    if 0 < total_duration <= DIRECT_LOAD_MAX_SECONDS:
+        y = load_mono(path, sr)
+        duration = len(y) / sr if sr else 0.0
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(np.atleast_1d(tempo)[0])
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr).tolist()
+        downbeats = _safe_downbeats(y, sr, beat_times)
+        meter = _meter_from_downbeats(downbeats, beat_times)
+        if meter not in (2, 3, 4):
+            # 只接受常见的小节长度，其余视为估计不可靠
+            meter = 0 if not downbeats else meter
+        return {
+            "path": str(path),
+            "bpm": round(bpm, 2),
+            "beats": [round(float(b), 4) for b in beat_times],
+            "downbeats": downbeats,
+            "meter": meter,
+            "duration": round(float(duration), 4),
+            "sr": sr,
+        }
 
-    downbeats = []
-    meter = 0
-    try:
-        downbeats = _estimate_downbeats(y, sr, beat_times)
-        if downbeats and len(beat_times) >= 4:
-            idx = [min(range(len(beat_times)),
-                       key=lambda i: abs(beat_times[i] - d))
-                   for d in downbeats[:6]]
-            gaps = sorted(b - a for a, b in zip(idx, idx[1:]) if b > a)
-            if gaps:
-                meter = int(gaps[len(gaps) // 2])
-    except Exception:
-        downbeats = []
-        meter = 0
-    if meter not in (2, 3, 4):
-        # 只接受常见的小节长度，其余视为估计不可靠
-        meter = 0 if not downbeats else meter
+    # ---- 长音频：分块 ----
+    # 关键点：librosa 的 beat_track 需要一点前置上下文才能定住节拍相位。
+    # 如果每块都从块起点开始解，块开头几拍会被判丢（实测块边界漏拍）。
+    # 所以每块从“块起点 - preroll”开始解，再给块尾多解一段 overlap 兜底，
+    # 最后只保留落在本块核心区间 [块起点, 块起点+core_len) 内的拍点，
+    # 既不重复也不漏。
+    core_len = CHUNK_SECONDS
+    preroll = min(4.0, core_len / 4.0)
+    tail = min(4.0, core_len / 4.0)
+    all_beats = []
+    bpm = 0.0
+    duration = 0.0
+    total = total_duration if total_duration > 0 else 0.0
+    core_start = 0.0
+    while True:
+        if total > 0 and core_start >= total:
+            break
+        dec_start = max(0.0, core_start - preroll)
+        dec_len = (core_start - dec_start) + core_len + tail
+        got = False
+        for _s, chunk in iter_mono_chunks(path, dec_len, sr, start_at=dec_start):
+            if chunk.size == 0:
+                continue
+            got = True
+            duration = max(duration, dec_start + chunk.size / float(sr))
+            try:
+                tempo, beat_frames = librosa.beat.beat_track(y=chunk, sr=sr)
+            except Exception:
+                tempo, beat_frames = 0.0, np.array([], dtype=int)
+            t_val = float(np.atleast_1d(tempo)[0]) if tempo is not None else 0.0
+            if t_val > 0:
+                bpm = t_val if bpm <= 0 else float(np.median([bpm, t_val]))
+            local = (librosa.frames_to_time(beat_frames, sr=sr)
+                     if len(beat_frames) else [])
+            mine_end = core_start + core_len
+            for t in local:
+                abs_t = float(t) + dec_start
+                if core_start - 1e-6 <= abs_t < mine_end - 1e-6:
+                    all_beats.append(round(abs_t, 4))
+        if not got:
+            break
+        core_start += core_len
 
+    all_beats = sorted(set(all_beats))
+    # downbeats/meter 在分块路径下不做跨块推断（跨块小节相位不可靠），保持为空
     return {
         "path": str(path),
-        "bpm": round(bpm, 2),
-        "beats": [round(float(b), 4) for b in beat_times],
-        "downbeats": downbeats,
-        "meter": meter,
+        "bpm": round(bpm, 2) if bpm > 0 else 0.0,
+        "beats": all_beats,
+        "downbeats": [],
+        "meter": 0,
         "duration": round(float(duration), 4),
         "sr": sr,
+        "chunked": True,
     }
+
+
+def _safe_downbeats(y, sr, beat_times):
+    """估计强拍；失败时返回空列表（不伪造）。"""
+    try:
+        downbeats = _estimate_downbeats(y, sr, beat_times)
+    except Exception:
+        return []
+    return downbeats
+
+
+def _meter_from_downbeats(downbeats, beat_times):
+    """由强拍序列推断小节拍数（2/3/4），推不出返回 0。"""
+    if not downbeats or len(beat_times) < 4:
+        return 0
+    try:
+        idx = [min(range(len(beat_times)),
+                   key=lambda i: abs(beat_times[i] - d))
+               for d in downbeats[:6]]
+        gaps = sorted(b - a for a, b in zip(idx, idx[1:]) if b > a)
+        if gaps:
+            return int(gaps[len(gaps) // 2])
+    except Exception:
+        pass
+    return 0
 
 
 def nearest_beat(beats, target, tolerance):
