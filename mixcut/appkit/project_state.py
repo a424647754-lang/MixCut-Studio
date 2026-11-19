@@ -43,7 +43,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMessageBox, QFileDialog
 
 
@@ -563,6 +563,113 @@ class ProjectStateMixin:
                  f"{len(data['analysis']['items'])} 个分析片段）")
         return True
 
+    # =================================================
+    # 自动保存与崩溃恢复
+    # =================================================
+
+    def start_autosave(self):
+        """启动每 60 秒一次的自动保存定时器（重复调用无副作用）。"""
+        if getattr(self, "_autosave_timer", None) is not None:
+            return
+        from . import autosave as _as
+        timer = QTimer(self)
+        timer.setInterval(_as.AUTOSAVE_INTERVAL_MS)
+        timer.timeout.connect(self._autosave_tick)
+        timer.start()
+        self._autosave_timer = timer
+        self._autosave_warned = False
+
+    def _autosave_tick(self):
+        """定时器回调：仅在工程有改动时静默写一份自动保存。"""
+        try:
+            self.autosave_now()
+        except Exception:
+            # 自动保存绝不能影响正常使用，任何异常都静默吞掉
+            pass
+
+    def autosave_now(self, force=False):
+        """把当前状态写入自动保存文件，返回写入的路径（未写则 None）。
+
+        规则：
+          · 没有工程路径 → 不写（没有名字可继承）
+          · 未修改且非强制 → 不写（避免每分钟无意义写盘）
+        """
+        path = getattr(self, "_project_path", "") or ""
+        if not path:
+            return None
+        if not force:
+            try:
+                if not self._project_dirty():
+                    return None
+            except Exception:
+                return None
+        from . import autosave as _as
+        dest = _as.autosave_path(path)
+        if not dest:
+            return None
+        try:
+            data = self._project_state_v3()
+        except Exception:
+            return None
+        if (data.get("library") or {}).get("tree") is None:
+            return None
+        if not _as.atomic_write_json(dest, data):
+            return None
+        # 记下写入时刻，界面上可用于提示"已自动保存"
+        import time as _t
+        self._autosave_at = _t.time()
+        return dest
+
+    def _try_recover_from_autosave(self, path, reason):
+        """主工程不可用时，尝试用自动保存副本恢复。
+
+        三种结果：
+          · 有可用副本且用户同意  → 返回 recovered data（dict）
+          · 有副本但用户放弃      → 返回 None（已记录日志）
+          · 没有可用副本／副本也坏 → 返回 None，并**明确告知用户无可用恢复文件**
+        """
+        from . import autosave as _as
+        import os as _os
+        import time as _t
+
+        # 先看副本是否存在（哪怕损坏也要告诉用户它存在但不可用）
+        cand = _as.autosave_path(path)
+        exists = bool(cand and _os.path.isfile(cand))
+
+        found = _as.find_recovery(path)
+        if not found:
+            # 没有任何可用恢复文件：直接明确告知
+            if exists:
+                detail = ("自动保存副本也损坏了：\n%s\n\n"
+                          "该工程已损坏，且无可用的恢复文件。" % cand)
+            else:
+                detail = ("没有找到自动保存副本。\n\n"
+                          "该工程已损坏，且无可用的恢复文件。")
+            self.log("工程损坏且无可用恢复文件：%s（%s）" % (path, reason))
+            QMessageBox.critical(
+                self, "工程已损坏",
+                "无法打开这个工程文件：\n%s\n\n原因：%s\n\n%s"
+                % (path, reason, detail))
+            return None
+
+        rec_path, rec_data = found
+        try:
+            mtime = _t.strftime("%Y-%m-%d %H:%M:%S",
+                                _t.localtime(_os.path.getmtime(rec_path)))
+        except Exception:
+            mtime = "未知时间"
+        ans = QMessageBox.question(
+            self, "工程文件损坏",
+            "当前工程无法读取：%s\n\n"
+            "发现自动保存的副本：\n%s\n（保存于 %s）\n\n"
+            "是否从这份自动保存恢复？\n"
+            "（选「否」将放弃打开）" % (reason, _os.path.basename(rec_path), mtime))
+        if ans != QMessageBox.StandardButton.Yes:
+            self.log("工程打开已取消：用户未选择从自动保存恢复")
+            return None
+        self.log("主工程损坏，已从自动保存恢复：%s" % rec_path)
+        return rec_data
+
     def _restore_library_tree(self, data):
         """用工程里的树结构还原旧素材树；旧格式只有名单时退化为平铺。"""
         old = self.backend.ensure()
@@ -867,12 +974,22 @@ class ProjectStateMixin:
                 if data.get(key) is not None and not isinstance(data.get(key), dict):
                     raise ValueError("工程字段 %s 格式不正确" % key)
         except Exception as exc:
-            self.log("打开工程失败：%s" % exc)
-            QMessageBox.warning(self, "打开失败",
-                                "这个文件不是有效的 MixCut 工程：\n%s" % exc)
-            return False
+            # 主工程损坏：先尝试从自动保存副本恢复。
+            # _try_recover_from_autosave 内部已经负责所有用户提示
+            # （有副本→询问是否恢复；无副本/副本也坏→明确告知无可用恢复文件），
+            # 这里不再重复弹框。
+            recovered = self._try_recover_from_autosave(path, str(exc))
+            if recovered is None:
+                return False
+            data = recovered
         try:
-            return self._load_project_data(data, path)
+            ok = self._load_project_data(data, path)
+            if ok:
+                # 打开成功后把当前内容复制一份为自动保存基线，
+                # 这样即使之后主文件损坏，也有一份与打开时一致的副本。
+                from . import autosave as _as
+                _as.copy_as_autosave(path)
+            return ok
         except Exception as exc:
             self.log("工程恢复中断：%s" % exc)
             QMessageBox.warning(self, "打开失败",

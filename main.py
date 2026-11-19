@@ -348,6 +348,13 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
             self._params_watch.timeout.connect(self._watch_params)
             self._params_watch.start()
 
+        # 自动保存：每分钟检查一次，仅在工程有改动时静默写入
+        # _project_backups/<工程名>.autosave.mixcut
+        try:
+            self.start_autosave()
+        except Exception:
+            pass
+
     def _watch_params(self):
         if getattr(self, "_history_busy", False):
             return
