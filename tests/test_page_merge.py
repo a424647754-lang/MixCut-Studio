@@ -29,8 +29,8 @@ win.show()
 app.processEvents()
 
 # 1 导航只剩四项，且没有“素材库”
-items = [k for k in win.shell.nav._buttons]
-labels = [win.shell.nav._buttons[k].text() for k in items]
+items = [k for k in win.shell.sidebar.items]
+labels = [win.shell.sidebar.items[k].text() for k in items]
 check("1 导航只有 工作台/混剪配置/批量任务/设置",
       items == ["workbench", "mix", "tasks", "settings"], str(labels))
 check("1b 已删除“素材库”导航项", "素材库" not in labels)

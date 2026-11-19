@@ -140,3 +140,13 @@ bench_results/
 _verify_ui_*/
 *_便签取证_*/
 _git_history_backup.txt
+
+# ---------- 本地台账与文档（只留在本地，不上传） ----------
+MixCut全周期工作台账.md
+MixCut Studio 用户手册与操作指南.docx
+
+# ---------- 临时验证脚本（tests/_*.py） ----------
+tests/_*.py
+tests/_*.json
+tests/_*.txt
+tests/_*.md
