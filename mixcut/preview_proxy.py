@@ -237,6 +237,28 @@ def cancel() -> None:
         service.cancel()
 
 
+def shutdown() -> None:
+    """彻底停止代理服务并等待其工作线程退出。
+
+    程序关闭前必须调用：代理线程是 daemon 线程，进程退出时会被直接杀掉，
+    线程内部的 finally 来不及执行，正在转码的 ffmpeg 会变成孤儿进程
+    继续占用内存（实测可达每个约 2GB）。
+    """
+    global _SERVICE
+    service = _SERVICE
+    if service is None:
+        return
+    try:
+        service.cancel()
+    except Exception:
+        pass
+    try:
+        service.shutdown()
+    except Exception:
+        pass
+    _SERVICE = None
+
+
 def pause() -> None:
     service = _get_service()
     if service is not None:
