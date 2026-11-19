@@ -555,19 +555,26 @@ class LibraryOpsMixin:
 
     def confirm_materials(self):
 
-        # 只取素材库里勾选的素材
-        page = getattr(self, "page_library", None)
-        raw = list(getattr(page, "_checked_paths", set()) or [])
+        # 只取素材库里勾选的素材。
+        # 勾选状态现在由宿主持有的 MaterialSelection 统一持有（解耦第2步），
+        # 不再依赖旧素材库页的私有字段。
+        raw = list(getattr(self, "selection", None).checked_paths()
+                   if getattr(self, "selection", None) is not None else [])
 
         # 勾选集可能残留已经从素材库移除的路径：只认当前素材库里真实存在的素材
         lib_paths = set(self.get_all_video_paths())
         paths = [p for p in raw if p in lib_paths]
-        if page is not None and hasattr(page, "_checked_paths"):
-            page._checked_paths = set(paths)
+        if getattr(self, "selection", None) is not None:
+            self.selection.set_checked(paths)
+        # 旧页若在显示，它的勾选框与计数标签需要跟着同步（纯展示）
+        page = getattr(self, "page_library", None)
+        if page is not None:
             refresh = getattr(page, "_refresh_checkboxes", None)
             if callable(refresh):
                 refresh()
-            page.sel_label.setText("已选 0")
+            label = getattr(page, "sel_label", None)
+            if label is not None:
+                label.setText("已选 0")
 
         if not paths:
             QMessageBox.warning(

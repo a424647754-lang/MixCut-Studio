@@ -798,9 +798,13 @@ class ProjectStateMixin:
                          if os.path.isfile(p2)]
             self._confirmed_paths = confirmed
             self.material_confirmed = bool(confirmed)
+            # 勾选状态写进宿主持有的 MaterialSelection（解耦第2步）
+            selection = getattr(self, "selection", None)
+            if selection is not None:
+                selection.set_checked(confirmed)
+            # 旧页若在显示，勾选框与计数标签需要跟着刷新（纯展示）
             old_page = getattr(self, "page_library", None)
-            if old_page is not None and hasattr(old_page, "_checked_paths"):
-                old_page._checked_paths = set(confirmed)
+            if old_page is not None:
                 for name in ("_refresh_checkboxes", "_sync_selection_labels"):
                     fn = getattr(old_page, name, None)
                     if callable(fn):

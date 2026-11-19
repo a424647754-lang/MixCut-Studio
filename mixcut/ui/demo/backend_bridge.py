@@ -142,10 +142,14 @@ class BackendBridge(QObject):
     def _normalize_initial_state(self):
         """旧工程初始为空；把新 UI 现有模拟素材转成旧树，保证入口按钮有上下文。"""
         # 新 UI 模拟素材没有真实文件路径，不能伪造进旧树，否则检查素材会失败。
-        # 因此这里只确保旧素材库页的勾选集合存在。
-        page = getattr(self._legacy, "page_library", None)
-        if page is not None and not hasattr(page, "_checked_paths"):
-            page._checked_paths = set()
+        # 因此这里只确保勾选状态持有者存在（解耦第2步后由宿主持有）。
+        old = self._legacy
+        if old is not None and getattr(old, "selection", None) is None:
+            try:
+                from mixcut.appkit.selection import MaterialSelection
+                old.selection = MaterialSelection(old)
+            except Exception:
+                pass
 
     # ---------------------------------------------------------
     # 素材库
@@ -541,8 +545,12 @@ class BackendBridge(QObject):
             except OSError:
                 old.invalidate_materials()
                 return False
+        # 勾选状态写进宿主持有的 MaterialSelection（解耦第2步）
+        selection = getattr(old, "selection", None)
+        if selection is not None:
+            selection.set_checked(paths)
         if page is not None:
-            page._checked_paths = set(paths)
+            # 旧页若在显示，勾选框需要跟着刷新（纯展示）
             refresh = getattr(page, "_refresh_checkboxes", None)
             if callable(refresh):
                 refresh()
@@ -559,9 +567,15 @@ class BackendBridge(QObject):
 
     def clear_checked(self):
         old = self.ensure()
-        page = getattr(old, "page_library", None) if old else None
+        if old is None:
+            return
+        # 勾选状态由宿主持有（解耦第2步）
+        selection = getattr(old, "selection", None)
+        if selection is not None:
+            selection.clear()
+        page = getattr(old, "page_library", None)
         if page is not None:
-            page._checked_paths = set()
+            # 旧页若在显示，勾选框需要跟着刷新（纯展示）
             refresh = getattr(page, "_refresh_checkboxes", None)
             if callable(refresh):
                 refresh()

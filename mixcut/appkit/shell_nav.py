@@ -134,10 +134,11 @@ class ShellNavMixin:
         elif hasattr(self, "controller") and hasattr(self, "demo_library"):
             selected = len(getattr(self.controller, "selected", set()))
         else:
-            page = getattr(self, "page_library", None)
-            checked = getattr(page, "_checked_paths", None) if page is not None else None
-            if checked is not None:
-                selected = len(set(checked))
+            # 勾选状态由宿主持有的 MaterialSelection 提供（解耦第2步），
+            # 不再通过旧素材库页读取。
+            selection = getattr(self, "selection", None)
+            if selection is not None:
+                selected = selection.count()
             else:
                 selector = getattr(self, "mix_selector", None)
                 selected = selector.selected_count() if selector is not None else 0
