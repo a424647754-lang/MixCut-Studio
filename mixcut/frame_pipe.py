@@ -294,25 +294,37 @@ def iter_frames(
         use_hwaccel = False
 
     fps = max(0.01, float(fps))
+    interval = 1.0 / fps
     extra = ("," + extra_vf) if extra_vf else ""
 
     if use_hwaccel:
         hw_args = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
         dl_fmt = "p010le" if ("10le" in pix_fmt or pix_fmt == "p010le") else "nv12"
         # 缩放走 scale_cuda（在显存里完成），最后下载回内存转成 yuv420p
-        vf = ("fps={:.6f},scale_cuda={}:{}:interp_algo=bilinear,"
-              "hwdownload,format={},format=yuv420p{}").format(
-            fps, out_w, out_h, dl_fmt, extra)
+        chain = ("scale_cuda={}:{}:interp_algo=bilinear,"
+                 "hwdownload,format={},format=yuv420p").format(out_w, out_h, dl_fmt)
     else:
         hw_args = []
-        vf = "fps={:.6f},scale={}:{}:flags=fast_bilinear{}".format(
-            fps, out_w, out_h, extra)
+        chain = "scale={}:{}:flags=fast_bilinear".format(out_w, out_h)
+
+    if keyframes_only:
+        # 关键帧采样不能用 fps 滤镜：fps 假设输入是连续帧序列，
+        # 而 skip_frame 之后进滤镜的只剩稀疏 I 帧，它会复制帧补位或直接丢帧，
+        # 复制出来的重复帧让 motion 恒为 0，按输出序号算的时间戳也会漂。
+        # 这里改成 select 按「距上一选中帧的绝对时间」挑帧，选帧间隔由我们说了算。
+        pick = ("select='isnan(prev_selected_t)+gte(t-prev_selected_t,{:.6f})'"
+                .format(interval))
+        vf = pick + "," + chain + extra
+    else:
+        vf = "fps={:.6f},".format(fps) + chain + extra
 
     cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error"]
     # 只解关键帧：ffmpeg 会跳过所有 B/P 帧，不解码它们的残差。
     # 实测 6K 4:2:0 提速 11.68 倍、4K 4:2:2 提速 1.85 倍（每 5 秒 3 帧的密度下）。
     if keyframes_only:
         cmd += ["-skip_frame", "nokey"]
+        # 让 ffmpeg 原样输出选中的帧，不做帧率补偿（老版本参数名是 -vsync）
+        cmd += ["-vsync", "0"]
     cmd += hw_args
     if start is not None and start > 0:
         cmd += ["-ss", "{:.3f}".format(float(start))]
@@ -350,7 +362,12 @@ def iter_frames(
 def count_frames(path: str, fps: float = 0.6,
                  start: Optional[float] = None,
                  duration: Optional[float] = None) -> int:
-    """预估抽帧数量，用于进度条；不实际解码。"""
+    """预估抽帧数量，用于进度条；不实际解码。
+
+    注意：keyframes_only 采样下实际帧数取决于素材的 I 帧密度，
+    这里按 fps 算出来的是「上限」，关键帧稀疏时会偏多，进度条可能提前到 100%。
+    需要精确数量时请按实际产出计数。
+    """
     meta = probe_media(path)
     if not meta:
         return 0
