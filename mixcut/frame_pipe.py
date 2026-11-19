@@ -329,9 +329,10 @@ def iter_frames(
 
     frame_bytes = out_w * out_h * 3
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    # 登记：调用方若 break 后不及时 close 生成器，也能被 kill_all() 兜底清理
+    # 登记：调用方若 break 后不及时收尾，也能被 kill_all() 兜底清理
     _register(proc)
     index = 0
+    completed = False   # ffmpeg 是否自行读完（而非被我们提前终止）
     try:
         while True:
             chunk = proc.stdout.read(frame_bytes)
@@ -341,10 +342,24 @@ def iter_frames(
             timestamp = index / fps
             index += 1
             yield timestamp, frame
+        completed = True
     finally:
         # 放在 finally 里，配合调用方显式 gen.close() 可立即生效，
         # 不再依赖 GC 的回收时机。
         _terminate(proc)
+
+    # ---- 关键帧模式空产物自动回退 ----
+    # `-skip_frame nokey` 只解 I 帧。若素材关键帧极稀疏（实测：ffmpeg 合成
+    # 的整段仅 1 个 I 帧时，加该参数后一帧都不输出），会导致
+    # 「分析完成，共 0 个片段」。此时自动改用普通解码重跑。
+    #
+    # 只在「开了关键帧模式 + 一帧未出 + ffmpeg 自己跑完了」时才回退：
+    # 调用方主动 break（用户暂停/停止）时 completed 为 False，不会触发重跑。
+    if keyframes_only and index == 0 and completed:
+        yield from iter_frames(
+            path, fps=fps, max_side=max_side, start=start,
+            duration=duration, extra_vf=extra_vf, use_hwaccel=use_hwaccel,
+            keyframes_only=False)
 
 
 def count_frames(path: str, fps: float = 0.6,

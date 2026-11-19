@@ -92,7 +92,10 @@ class ShellNavMixin:
         shell = getattr(self, "shell", None)
         if shell is None:
             return
-        page = shell._pages.get("analyze")
+        # 页面字典在 DemoShell 上是 pages（旧名 _pages 已废弃），
+        # 且分析页的键是 "analysis" 而不是 "analyze"。
+        pages = getattr(shell, "pages", None) or {}
+        page = pages.get("analysis")
         current = page._mode_key if page is not None else "medium"
 
         dlg = ModeSelectDialog(current, self)
@@ -100,7 +103,7 @@ class ShellNavMixin:
             return  # 用户取消：不跳转、不分析
 
         mode_key = dlg.selected_mode()
-        shell.nav.select("analyze")
+        shell.show_page("analysis")
         if page is not None:
             page.set_mode(mode_key)   # 确保下拉框/内部键与弹窗选择一致
             page._start_analysis()
@@ -144,7 +147,22 @@ class ShellNavMixin:
         shell.topbar.set_project(name)
 
     def _refresh_library_cards(self):
-        """素材变化后刷新卡片（导入 / 删除 / 撤销 / 新建分类都会走这里）。"""
+        """素材变化后刷新卡片（导入 / 删除 / 撤销 / 新建分类都会走这里）。
+
+        新旧界面刷新的对象不同：
+          · 新界面可见的是 ``demo_library``，由 ``reload_library()`` 重建卡片
+            （它内部也会顺带刷新旧页，所以新界面下不必再单独刷旧页）
+          · 旧界面只刷 ``page_library``
+
+        不这样分会造成「导入后新界面卡片一直是空的，要手动切页才出来」。
+        """
+        if getattr(self, "use_new_ui", False):
+            try:
+                self.reload_library()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+            return
         page = getattr(self, "page_library", None)
         if page is None:
             return

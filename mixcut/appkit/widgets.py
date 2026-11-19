@@ -215,6 +215,28 @@ class UndoableTreeWidget(QTreeWidget):
 
         self.expandAll()
 
+    def _host_window(self):
+        """取真正的宿主窗口（MainWindow），找不到返回 None。
+
+        树可能被挂在旧页面的 QTabWidget 里，此时 ``self.window()`` 返回的是
+        TabWidget 而非 MainWindow，直接用它调用 add_paths_to_tree 等宿主方法
+        会 AttributeError。
+
+        查找顺序：
+          1. ``owner_window``——建树时显式记下的宿主（最可靠）
+          2. ``self.window()``，再沿 parentWidget 链向上找带宿主方法的那一层
+
+        判定依据是「有没有 invalidate_materials」——这是 MainWindow 独有、
+        且每处调用都会用到的方法。
+        """
+        window = getattr(self, "owner_window", None)
+        if window is not None and hasattr(window, "invalidate_materials"):
+            return window
+        window = self.window()
+        while window is not None and not hasattr(window, "invalidate_materials"):
+            window = window.parentWidget()
+        return window
+
     def undo_action(self):
 
         if not self.history:
@@ -231,11 +253,7 @@ class UndoableTreeWidget(QTreeWidget):
 
         # 树嵌在旧页/TabWidget 里，新 UI 下 parentWidget() 链到不了主窗口，
         # 优先用建树时记下的宿主，其次再沿父链向上找。
-        window = getattr(self, "owner_window", None)
-        if window is None or not hasattr(window, "invalidate_materials"):
-            window = self.window()
-            while window is not None and not hasattr(window, "invalidate_materials"):
-                window = window.parentWidget()
+        window = self._host_window()
         if window is None:
             return
 
@@ -267,7 +285,10 @@ class UndoableTreeWidget(QTreeWidget):
         · 树内拖动素材：移动到目标分类下（QTreeWidget 的默认行为）。
         两种情况都会记一次撤销状态并刷新界面。
         """
-        window = self.window()
+        window = self._host_window()
+        if window is None:
+            event.ignore()
+            return
         mime = event.mimeData()
 
         # ① 外部文件拖入
@@ -314,7 +335,9 @@ class UndoableTreeWidget(QTreeWidget):
             old_parent.removeChild(item)
             target.addChild(item)
             target.setExpanded(True)
-            window = self.window()
+            window = self._host_window()
+            if window is None:
+                return
             window.invalidate_materials()
             window.update_count()
             window._refresh_library_cards()
@@ -398,7 +421,9 @@ class UndoableTreeWidget(QTreeWidget):
         def _do_delete():
             self.clearSelection()
             item.setSelected(True)
-            self.window().remove_selected()
+            window = self._host_window()
+            if window is not None:
+                window.remove_selected()
 
         delete_action.triggered.connect(_do_delete)
 

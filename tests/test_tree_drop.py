@@ -62,7 +62,9 @@ check("拖入的素材被导入", str(video.resolve()) in paths
       or str(video) in paths, str(paths))
 check("素材挂在分类节点下", cat.childCount() == 1, cat.childCount())
 
-# 正常收尾，避免进程退出时 Qt 对象析构崩溃
+# 正常收尾：跳过未保存确认框，避免 offscreen 下阻塞
+# （关闭时 closeEvent 会弹「有未保存的改动」，无人点击会一直卡住）
+win._force_close = True
 win.close()
 win.deleteLater()
 app.processEvents()
