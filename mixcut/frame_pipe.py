@@ -333,11 +333,29 @@ def iter_frames(
     _register(proc)
     index = 0
     completed = False   # ffmpeg 是否自行读完（而非被我们提前终止）
+    prev_chunk = None   # 关键帧模式下用于识别 ffmpeg 补位的重复帧
+    dup_skipped = 0
     try:
         while True:
             chunk = proc.stdout.read(frame_bytes)
             if not chunk or len(chunk) < frame_bytes:
                 break
+            # ---- 关键帧模式去重 ----
+            # `-skip_frame nokey` 之后进入 fps 滤镜的只剩稀疏 I 帧，
+            # 而 fps 滤镜会「复制最近一帧补位」把帧率补齐。
+            # 实测 6K 素材 12 秒：14 帧里有 2 帧与前一帧逐字节相同。
+            # 这些重复帧会让相邻帧差恒为 0，直接影响 motion / 抖动判定，
+            # 也会让「按序号算的时间戳」与实际内容错位。
+            #
+            # ffmpeg 侧的帧率控制参数在这类素材上不可靠（-vsync 0 /
+            # -fps_mode passthrough 实测会让 ffmpeg 异常退出），
+            # 因此在接收端过滤：与上一帧完全相同就跳过，不产出。
+            # 跳过时不递增 index，保证时间戳仍然均匀递增。
+            if keyframes_only and prev_chunk is not None \
+                    and chunk == prev_chunk:
+                dup_skipped += 1
+                continue
+            prev_chunk = chunk
             frame = np.frombuffer(chunk, dtype=np.uint8).reshape(out_h, out_w, 3)
             timestamp = index / fps
             index += 1
