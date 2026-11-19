@@ -243,10 +243,12 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self._new_ui_ready = True
         self._ensure_probe_worker()
 
-        if getattr(self.page_library, "preview_slot", None) is not None:
-            # 旧素材库页虽然不显示，仍需要这块卡片承载进度条等旧控件；
-            # video_widget 已经归 demo 工作台，这里只放进隐藏页，不影响可见界面。
-            self.page_library.preview_slot.addWidget(self._demo_player_card)
+        # 播放器卡片（seek_slider / aspect_combo / 旧播放按钮等控件）不再挂进
+        # 旧素材库页：video_widget 早已被 demo 工作台的 PreviewStage 接管，
+        # 卡片本身只剩一批不可见的旧控件，供 _on_seek / _on_position 等方法操作。
+        # 直接挂到主窗口下并隐藏，旧页因此不再承担任何挂载职责。
+        self._demo_player_card.setParent(self)
+        self._demo_player_card.hide()
 
         self._refresh_topbar()
         self.shell.show_page("library")
