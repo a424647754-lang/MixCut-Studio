@@ -1332,6 +1332,40 @@ class LibraryPage(QWidget):
     def on_shown(self):
         self.refresh_cards()
 
+    # =================================================
+    # 勾选状态：转接到宿主共享的 MaterialSelection
+    # =================================================
+    # 解耦第2步：勾选状态原本是 LibraryPage 的私有字段 _checked_paths，
+    # 却被 library_ops / shell_nav / project_state / backend_bridge
+    # 四个模块从外部读写，导致新界面无法脱离旧页实例。
+    # 现在把状态放到宿主持有的 MaterialSelection 上，本类通过
+    # property 转发——类内所有 self._checked_paths.xxx() 的写法语义不变。
+    #
+    # 注意：这里按需取宿主实例而不缓存，因为 LibraryPage 构造期间
+    # 就会有外部代码通过窗口读勾选状态。
+
+    def _resolve_selection(self):
+        """取得宿主（MainWindow）持有的 MaterialSelection；没有就自建。"""
+        sel = getattr(self.win, "selection", None)
+        if sel is None:
+            from mixcut.appkit.selection import MaterialSelection
+            sel = MaterialSelection()
+            try:
+                self.win.selection = sel
+            except Exception:
+                pass
+        return sel
+
+    @property
+    def _checked_paths(self):
+        return self._resolve_selection()
+
+    @_checked_paths.setter
+    def _checked_paths(self, value):
+        # 外部赋值（如 `page._checked_paths = set(paths)`）走这里，
+        # 变成对共享对象的整体替换，保证两边看到同一份状态。
+        self._resolve_selection().set_checked(value)
+
 
 def _call(win, method, *args):
     fn = getattr(win, method, None)

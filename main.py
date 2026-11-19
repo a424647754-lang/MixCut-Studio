@@ -128,6 +128,12 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self.material_confirmed = False
         self._confirmed_paths = []
 
+        # 素材勾选状态的唯一持有者（解耦第2步）。
+        # 旧素材库页把它转接到这里的 selection 上，外部模块也应改为读写本对象，
+        # 这样新界面不再依赖旧素材库页实例。
+        from mixcut.appkit.selection import MaterialSelection
+        self.selection = MaterialSelection(self)
+
         # 素材分析内存缓存：运行期间复用，关闭软件进程结束即自动释放
         self.analysis_cache = AnalysisCache()
 
