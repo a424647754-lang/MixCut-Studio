@@ -108,9 +108,13 @@ class TopBar(QWidget):
         self.btn_new = SoftButton("新建工程", "ghost", height=30)
         self.btn_open = SoftButton("打开工程", "ghost", height=30)
         self.btn_save = SoftButton("保存工程", "secondary", height=30)
+        # 另存为：保存到新文件并接管后续保存（Ctrl+Shift+S）
+        self.btn_save_as = SoftButton("另存为", "ghost", height=30)
+        self.btn_save_as.setToolTip("另存为（Ctrl+Shift+S）")
         lay.addWidget(self.btn_new)
         lay.addWidget(self.btn_open)
         lay.addWidget(self.btn_save)
+        lay.addWidget(self.btn_save_as)
         lay.addSpacing(6)
 
         self.btn_import = SoftButton("导入素材", "primary", "import", height=32, min_width=100)
@@ -127,6 +131,7 @@ class TopBar(QWidget):
         self.btn_new.clicked.connect(lambda: win.new_project())
         self.btn_open.clicked.connect(lambda: win.open_project())
         self.btn_save.clicked.connect(lambda: win._shortcut_save())
+        self.btn_save_as.clicked.connect(lambda: win.save_project_as())
         self.settings.clicked.connect(lambda: win.go_page("settings"))
         self.search.clicked.connect(lambda: win.go_page("library"))
         self.btn_min.clicked.connect(win.showMinimized)

@@ -540,17 +540,18 @@ class SettingsPage(QWidget):
             self.win.controller.log("设置 · 后台桥不可用，保存工程未执行：" +
                                     b.load_error.splitlines()[-1])
             return
+        # 与顶部「保存工程」按钮一致：已经保存过的工程直接覆盖原文件，
+        # 不再每次弹对话框（否则用户会误以为在新建工程）。
         current = getattr(self.win, "_project_path", "") or ""
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存工程", current, "MixCut 工程 (*.mixcut)")
-        if not path:
+        if not current:
+            # 还没有工程文件：走一次另存为让用户选路径
+            if self.win.save_project_as():
+                self.win.controller.log("设置 · 工程已保存")
             return
-        if not path.lower().endswith(".mixcut"):
-            path += ".mixcut"
-        if b.save_project_to(path):
-            self.win.controller.log("设置 · 工程已保存：%s" % path)
+        if b.save_project_to(current):
+            self.win.controller.log("设置 · 工程已更新：%s" % current)
         else:
-            self.win.controller.log("设置 · 工程保存失败：%s" % path)
+            self.win.controller.log("设置 · 工程保存失败：%s" % current)
 
     def _engine_refresh(self):
         self._purge_cache()

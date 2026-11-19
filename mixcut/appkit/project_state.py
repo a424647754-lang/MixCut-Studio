@@ -471,7 +471,8 @@ class ProjectStateMixin:
     def save_project(self, path=None):
         """保存工程：校验 → 原子写临时文件 → 备份旧工程 → 替换。
 
-        Ctrl+S 已保存过时走 `_shortcut_save` 直接传路径；设置页仍可弹框。
+        path 为 None 时弹「保存工程」对话框；传了路径就直接写。
+        Ctrl+S 与顶部按钮都走 `_shortcut_save`，已保存过的工程不会弹框。
         """
         from PySide6.QtWidgets import QFileDialog
 
@@ -484,7 +485,35 @@ class ProjectStateMixin:
         if not str(path).lower().endswith(".mixcut"):
             path = str(path) + ".mixcut"
         path = os.path.abspath(path)
+        return self._write_project_file(path)
 
+    def save_project_as(self):
+        """另存为：总是弹出对话框选新路径，保存后把当前工程切换到该文件。
+
+        与「保存」的区别：
+          · 保存      —— 已有工程就直接覆盖原文件，不弹框
+          · 另存为    —— 无条件弹框，保存到用户新选的路径，并接管后续保存
+        工具栏按钮与 Ctrl+Shift+S 都走这里。
+        """
+        from PySide6.QtWidgets import QFileDialog
+
+        current = getattr(self, "_project_path", "") or ""
+        default = current
+        if not default:
+            # 还没有工程文件：给个可用的默认名（不把整个路径当文件名）
+            default = "未命名工程.mixcut"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "另存为", default, "MixCut 工程 (*.mixcut)")
+        if not path:
+            return False
+        if not str(path).lower().endswith(".mixcut"):
+            path = str(path) + ".mixcut"
+        path = os.path.abspath(path)
+        return self._write_project_file(path)
+
+    def _write_project_file(self, path):
+        """把当前状态原子写入指定工程文件（保存与另存为共用的底层实现）。"""
         page = getattr(self, "page_analyze", None)
         worker = getattr(page, "_worker", None)
         if worker is not None and worker.isRunning():

@@ -329,6 +329,8 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         bind("Ctrl+I", self._topbar_import)
         bind("Ctrl+R", self._shortcut_run_mix)
         bind("Ctrl+S", self._shortcut_save)
+        # 另存为：与顶部工具栏「另存为」按钮同一入口
+        bind("Ctrl+Shift+S", self.save_project_as)
         bind("Ctrl+O", self.open_project)
         bind("Ctrl+N", self.new_project)
         bind("Ctrl+Z", self.undo_step)
