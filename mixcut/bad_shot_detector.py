@@ -84,23 +84,32 @@ class BadShotDetector:
         processed = 0
 
         try:
-            for timestamp, frame in frame_pipe.iter_frames(
+            # 显式持有生成器，保证 cancel 后立即关闭并杀掉 ffmpeg，
+            # 而不是等 GC（期间 ffmpeg 会一直解码占内存）。
+            gen = frame_pipe.iter_frames(
                 video_path,
                 fps=sample_fps,
                 max_side=self.MAX_FRAME_SIDE,
-            ):
-                if cancel_check and cancel_check():
-                    break
-                index = int(timestamp // window)
-                if index < 0 or index >= window_count:
-                    continue
-                q, gray = self._eval_frame(frame, previous_gray)
-                previous_gray = gray
-                buckets[index].append(q)
-                processed += 1
-                if progress_cb and processed % max(1, sample_count) == 0:
-                    done = min(window_count, index + 1)
-                    progress_cb(done, window_count, f"画面质量评估 {done}/{window_count}")
+            )
+            try:
+                for timestamp, frame in gen:
+                    if cancel_check and cancel_check():
+                        break
+                    index = int(timestamp // window)
+                    if index < 0 or index >= window_count:
+                        continue
+                    q, gray = self._eval_frame(frame, previous_gray)
+                    previous_gray = gray
+                    buckets[index].append(q)
+                    processed += 1
+                    if progress_cb and processed % max(1, sample_count) == 0:
+                        done = min(window_count, index + 1)
+                        progress_cb(done, window_count, f"画面质量评估 {done}/{window_count}")
+            finally:
+                try:
+                    gen.close()
+                except Exception:
+                    pass
         except Exception:
             # 单条素材解码异常不应该炸掉整批分析，保留已采集到的部分。
             pass

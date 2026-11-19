@@ -227,6 +227,13 @@ class AnalysisWorker(QThread):
     def stop(self):
         self._stop = True
         self._gate.set()
+        # 兜底：立刻终止本次分析启动的所有 ffmpeg。
+        # 只标 _stop 的话，正在管道上阻塞的 ffmpeg 要等主循环走到检查点
+        # 才会被关闭，期间仍占据 GB 级内存。
+        try:
+            frame_pipe.kill_all()
+        except Exception:
+            pass
 
     def pause(self):
         self._paused = True
@@ -351,20 +358,27 @@ class AnalysisWorker(QThread):
 
             frame_no = 0
             ok_any = True
+            # 显式持有生成器并保证最终关闭：
+            # 直接 for ... in iter_frames(...) 时，break 后生成器要等 GC 回收，
+            # 期间里面的 ffmpeg 会继续解码并占用 GB 级内存，多个叠加会拖垮机器。
+            # 这里用 try/finally + gen.close() 立即触发生成器的清理逻辑。
+            gen = None
             try:
-                for ts, frame in frame_pipe.iter_frames(
-                        path, fps=sample_fps,
-                        max_side=self.detector.MAX_FRAME_SIDE):
+                gen = frame_pipe.iter_frames(
+                    path, fps=sample_fps,
+                    max_side=self.detector.MAX_FRAME_SIDE)
+                for ts, frame in gen:
                     if self._stop:
                         ok_any = False
                         break
-                    while self._paused:
-                        self._gate.wait(0.25)
+                    if self._paused:
+                        # 暂停期间主动让出解码进程：ffmpeg 会因管道写满而阻塞，
+                        # 但进程本身仍在，因此暂停结束时重新建一次更稳妥。
+                        while self._paused and not self._stop:
+                            self._gate.wait(0.25)
                         if self._stop:
                             ok_any = False
                             break
-                    if not ok_any:
-                        break
                     frame_no += 1
                     # 按时间戳定位所属片段：片段区间是 [seg_start, seg_end)
                     # 不能用 int(ts // seg_dur) 推算，因为段边界可能不是
@@ -390,6 +404,13 @@ class AnalysisWorker(QThread):
             except Exception as exc:
                 logger.debug("顺序解码失败 %s: %s", path, exc)
                 ok_any = False
+            finally:
+                # 无条件关闭生成器 → 立即执行 frame_pipe 内部的 finally，杀掉 ffmpeg
+                if gen is not None:
+                    try:
+                        gen.close()
+                    except Exception:
+                        pass
 
             # 分桶评估：每段的采样帧按比例取 sample_count 个
             for seg_index in sorted(buckets):

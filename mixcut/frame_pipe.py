@@ -21,11 +21,68 @@
 
 import os
 import subprocess
+import threading
 from typing import Iterator, Optional, Tuple
 
 import numpy as np
 
 from .ffmpeg_tools import find_ffmpeg, find_ffprobe
+
+# ---------------------------------------------------------
+# 子进程登记表
+# ---------------------------------------------------------
+# 解码生成器如果被调用方 break 后迟迟不回收（GC 延迟），
+# 里面的 ffmpeg 会继续跑并吃 2GB 级内存，多个叠加会把机器拖死。
+# 这里把所有在跑的 ffmpeg 登记起来，提供 kill_all() 兜底：
+#   · 分析中止 / 取消时调用
+#   · 程序退出时调用
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_PROCS = set()
+
+
+def _register(proc):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.add(proc)
+
+
+def _unregister(proc):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.discard(proc)
+
+
+def _terminate(proc):
+    """终止一个 ffmpeg，并确保它从登记表移除。"""
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    _unregister(proc)
+
+
+def kill_all():
+    """终止本模块启动的全部 ffmpeg，返回终止数量。
+
+    分析被取消、界面关闭或程序退出时调用，避免子进程残留。
+    """
+    with _ACTIVE_LOCK:
+        procs = list(_ACTIVE_PROCS)
+    for p in procs:
+        _terminate(p)
+    return len(procs)
+
+
+def active_count() -> int:
+    """当前仍在登记的 ffmpeg 数量（调试/自检用）。"""
+    with _ACTIVE_LOCK:
+        return len(_ACTIVE_PROCS)
 
 
 def _even(value: int) -> int:
@@ -272,6 +329,8 @@ def iter_frames(
 
     frame_bytes = out_w * out_h * 3
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # 登记：调用方若 break 后不及时 close 生成器，也能被 kill_all() 兜底清理
+    _register(proc)
     index = 0
     try:
         while True:
@@ -283,18 +342,9 @@ def iter_frames(
             index += 1
             yield timestamp, frame
     finally:
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        # 放在 finally 里，配合调用方显式 gen.close() 可立即生效，
+        # 不再依赖 GC 的回收时机。
+        _terminate(proc)
 
 
 def count_frames(path: str, fps: float = 0.6,
