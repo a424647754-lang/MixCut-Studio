@@ -251,7 +251,7 @@ py -3.14 main.py
 ## 目录结构
 
 ```
-main.py                      主窗口与后端逻辑（体积较大，待拆分）
+main.py                      主窗口：启动装配、事件处理、入口
 mixcut/
 ├─ analysis.py               素材分析入口
 ├─ bad_shot_detector.py      画面质量检测（OpenCV）
@@ -263,10 +263,23 @@ mixcut/
 ├─ musicstudio.py            BGM 分析（节拍、闪避）
 ├─ preview_proxy.py          预览代理调度
 ├─ workers.py                后台任务线程
+├─ appkit/                   主窗口逻辑（Mixin 拆分，2026-11-19）
+│  ├─ constants.py           常量、路径工具
+│  ├─ selection.py           素材勾选状态（MaterialSelection）
+│  ├─ library_ops.py         素材树增删改、确认、选择器
+│  ├─ mix_task.py            混剪任务启动与取消
+│  ├─ param_build.py         混剪参数页 / 配置页构建
+│  ├─ preview_player.py      播放器控制、键盘过滤
+│  ├─ preview_stage.py       画幅切换、全屏
+│  ├─ project_state.py       工程读写、撤销重做
+│  ├─ autosave.py            自动保存与崩溃恢复
+│  ├─ shell_nav.py           页面导航、顶栏、日志
+│  ├─ widgets.py             通用控件（比例容器、滚轮守卫、素材树）
+│  └─ window_chrome.py       窗口外框与尺寸
 ├─ proxy/                    代理转码（编码探测、缓存、服务）
 └─ ui/
-   ├─ analyze_page.py        AI 分析页
-   ├─ library_page.py        旧素材库页（后台兼容保留）
+   ├─ analyze_page.py        分析页（含分析 worker 与片段卡片）
+   ├─ library_page.py        旧素材库页（实例已移除，模块保留）
    ├─ demo/                  主界面各页
    │  ├─ pages_library.py    素材库
    │  ├─ pages_work.py       素材预览
@@ -299,6 +312,10 @@ engine/                      自研引擎（不进版本库）
 | `*.mixcut` | 工程文件 |
 | `*.mp4` 等 | 素材 |
 | `mixcut/ui/fonts/*.ttf` | 字体版权 |
+| `_project_backups/` | 工程自动保存副本 |
+| `_backup_*/` | 本地回滚点 |
+| `tests/_*.py` 等 | 临时验证脚本（本地调试用） |
+| `MixCut全周期工作台账.md` | 本地开发台账 |
 
 ---
 
@@ -465,6 +482,8 @@ py -3.14 tests\test_analyze_folders.py
 py -3.14 tests\test_analyze_stats.py
 py -3.14 tests\test_library_drag_drop.py
 py -3.14 tests\test_library_preview.py
+py -3.14 tests\test_draft_compat.py
+py -3.14 tests\test_ui_shell.py
 ```
 
 | 测试文件 | 覆盖内容 | 断言数 |
@@ -473,8 +492,13 @@ py -3.14 tests\test_library_preview.py
 | `test_analyze_stats.py` | 顶部统计卡按本轮口径 | 7 |
 | `test_library_drag_drop.py` | 素材库拖拽进文件夹、右键多选移动 | 13 |
 | `test_library_preview.py` | 归类可见性、预览器不后台出声 | 16 |
+| `test_draft_compat.py` | 生成的剪映草稿字段与结构兼容性 | 34 |
+| `test_ui_shell.py` | 界面骨架、页面切换、导入→卡片→分析→混剪→草稿全流程 | 26 |
 
 **全部通过 = 界面与数据逻辑正常。**
+
+> `test_ui_shell.py` 会真实调用 ffmpeg 合成测试素材，
+> 完整跑一遍分析 + 混剪（约 1 分钟），因此是端到端级别的验证。
 
 ---
 
@@ -584,12 +608,51 @@ git push
 - `docs` —— 文档
 - `refactor` —— 重构
 
+### 新旧界面边界
+
+主界面由 `mixcut/ui/demo/` 下的页面承载。改造过程中遗留的旧页面实例
+已于 2026-11-19 全部移除，**下面这些属性不存在了，不要再引用**：
+
+| 已移除 | 说明 |
+|---|---|
+| `page_library` | 旧素材库页实例 |
+| `page_mix` / `page_settings` / `page_engine` / `page_workbench` | 其它旧页面 |
+
+**注意两个同名类**：
+
+```
+mixcut/ui/library_page.py        → LibraryPage（旧，实例已移除）
+mixcut/ui/demo/pages_library.py  → LibraryPage（新，正在使用）
+```
+
+**当前有效的对象**：
+
+| 属性 | 职责 |
+|---|---|
+| `demo_library` / `demo_params` / `demo_workbench` / `demo_settings` / `demo_tasks` | 各可见页面 |
+| `page_analyze` | 分析页 |
+| `selection` | 素材勾选状态（`MaterialSelection`） |
+| `probe_worker` | 后台探测线程 |
+| `tree` | 素材树 |
+
+素材勾选状态统一走 `self.selection`：
+
+```python
+self.selection.checked_paths()   # 读，返回副本
+self.selection.set_checked(paths)
+self.selection.count()
+self.selection.reconcile(existing)
+```
+
 ### 关键模块说明
 
 **`frame_pipe.py`** —— 视频解码的核心
 - `iter_frames()` —— 顺序产出 `(时间戳, BGR 帧)`
 - `hwaccel_available()` —— 判断能否硬解
-- `keyframes_only` —— 是否只解关键帧
+- `keyframes_only` —— 是否只解关键帧（默认开）
+  - 关键帧模式下会**逐字节去重**：`fps` 滤镜遇稀疏 I 帧时会复制帧补位，
+    实测约 14% 是重复帧，会让人为的「零差异」污染 motion/抖动指标
+  - 若该模式下**一帧都没有**（素材只有极少数 I 帧），自动回退普通解码重跑
 
 **`bad_shot_detector.py`** —— 画面质量评估
 - `analyze_video()` —— 按窗口分析整条视频
@@ -597,6 +660,16 @@ git push
 
 **`musicstudio.py`** —— BGM 分析
 - `analyze_bgm()` —— 节拍检测，长音频自动分块
+
+**`appkit/selection.py`** —— 素材勾选状态
+- `MaterialSelection` —— 勾选状态的唯一持有者，挂在 `MainWindow.selection` 上
+- `checked_paths()` / `set_checked()` / `add()` / `discard()` / `reconcile()`
+- 旧素材库页的 `_checked_paths` 是转发到它的 property，两处语义一致
+
+**`appkit/autosave.py`** —— 自动保存与崩溃恢复
+- 60 秒间隔、仅在工程有改动时写入
+- 写到 `_project_backups/<工程名>.autosave.mixcut`
+- 主文件损坏时优先尝试从这里恢复
 
 ---
 
