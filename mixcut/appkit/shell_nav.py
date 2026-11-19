@@ -164,6 +164,7 @@ class ShellNavMixin:
                 import traceback
                 traceback.print_exc()
             return
+        # 旧界面：刷新旧素材库页
         page = getattr(self, "page_library", None)
         if page is None:
             return
@@ -178,9 +179,6 @@ class ShellNavMixin:
         """顶部工具栏“刷新素材”：按磁盘现状重新统计素材（真实功能）。"""
         before = len(self.get_all_video_paths())
         self.update_count()
-        page = getattr(self, "page_library", None)
-        if page is not None:
-            page.refresh_cards()
         after = len(self.get_all_video_paths())
         removed = before - after
         message = f"已刷新素材：当前 {after} 个"

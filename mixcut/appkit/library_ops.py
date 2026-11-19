@@ -392,9 +392,6 @@ class LibraryOpsMixin:
         )
         # 新界面顶部/卡片跟着真实数量刷新
         self._refresh_topbar()
-        page = getattr(self, "page_library", None)
-        if page is not None and hasattr(page, "update_count"):
-            page.update_count(count)
 
     def get_all_video_paths(self):
 
