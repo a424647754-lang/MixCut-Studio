@@ -168,7 +168,7 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
 
     def _build_new_shell(self):
         """demo 布局 + 旧后台原生对象。分析/任务先保留旧页面。"""
-        from mixcut.ui import library_page, mix_page, settings_page, engine_page
+        from mixcut.ui import library_page
         from mixcut.ui.analyze_page import AnalyzePage
         from mixcut.ui.demo.backend_bridge import BackendBridge
         from mixcut.ui.demo.window import DemoController
@@ -181,14 +181,13 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self.controller = DemoController(self)
         self.controller.stateChanged.connect(self._refresh_topbar)
 
-        # 旧页面仍然构建，旧后台方法刷新它们；可见页面由 DemoShell 承载。
+        # 旧素材库页仍然构建：它当前持有素材勾选状态（_checked_paths），
+        # 并且承载后台探测/缩略图线程，新界面尚未接管这两件事。
+        # 其余旧页面（MixPage / SettingsPage / EnginePage / 旧工作台）
+        # 在改为新界面后被创建即 hide，且没有任何代码再使用它们，已整体移除。
         self.page_library = library_page.LibraryPage(self)
-        self.page_mix = mix_page.MixPage(self)
-        self.page_settings = settings_page.SettingsPage(self)
-        self.page_workbench = self._build_workbench_page()
         # 旧素材库页虽然不显示，仍需要挂到 MainWindow，才能使用后台探测/缩略图线程。
         self.page_library.setParent(self)
-        self.page_engine = engine_page.EnginePage(self)
         self.page_analyze = AnalyzePage(self)
 
         # 玩家卡片必须先建：它内部会包住 video_widget。
@@ -227,10 +226,6 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self.tasks = self.demo_tasks
         self.settings_page = self.demo_settings
         self.page_library.hide()
-        self.page_mix.hide()
-        self.page_settings.hide()
-        self.page_engine.hide()
-        self.page_workbench.hide()
         # 旧页仍然保留做后台兼容，但不允许它们作为窗口子控件在左上角漏画碎片
         for _child in self.children():
             if isinstance(_child, QWidget) and _child is not self.shell \
@@ -255,36 +250,6 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self._kick_proxy_queue()
         # 快捷键统一在 QApplication 级绑定：Ctrl+I/R/S/Z/Y、Ctrl+1..5、空格、Esc、P
         self._bind_app_shortcuts()
-
-    def _build_workbench_page(self):
-        """工作台 = 素材库 + 预览窗口。
-
-        素材库页面（文件夹树 / 素材卡片 / 筛选 / 操作条）直接作为工作台主体，
-        它右侧原来的“素材详情”文字区在 LibraryPage 里换成预览槽位，
-        由 _build_player_card() 填进播放器。
-        """
-        from PySide6.QtWidgets import QSplitter
-        from mixcut.ui.components import Card
-
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(10)
-
-        head = QHBoxLayout()
-        title = QLabel("工作台")
-        title.setObjectName("Hero")
-        head.addWidget(title)
-        head.addStretch(1)
-        quick = QPushButton("开始混剪")
-        quick.setObjectName("Primary")
-        quick.clicked.connect(self._navigate_to_mix)
-        head.addWidget(quick)
-        lay.addLayout(head)
-
-        # 素材库页面本身就是主体（内部已含 树 + 卡片 + 筛选 + 预览槽位）
-        lay.addWidget(self.page_library, 1)
-        return page
 
     # ---- demo 页面需要的宿主接口（直接复用旧后台） ----
 
