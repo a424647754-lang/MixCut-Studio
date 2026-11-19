@@ -234,7 +234,9 @@ class BackendBridge(QObject):
         if fmt.get("duration"):
             duration = _fmt_duration(fmt["duration"])
         name = node.text(0) or Path(path).name
-        meta = (getattr(getattr(self._legacy, "page_library", None), "_meta", {}) or {}).get(path, {})
+        # 旧素材库页已移除，_meta 缓存不再存在；这里的元数据全部来自 ffprobe 结果，
+        # meta 保持空字典即可（下面每处都有 or 兜底）。
+        meta = {}
         video = info.get("video") or {}
         width = video.get("width") or meta.get("width") or 0
         height = video.get("height") or meta.get("height") or 0

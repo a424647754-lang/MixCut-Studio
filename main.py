@@ -174,7 +174,6 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
 
     def _build_new_shell(self):
         """demo 布局 + 旧后台原生对象。分析/任务先保留旧页面。"""
-        from mixcut.ui import library_page
         from mixcut.ui.analyze_page import AnalyzePage
         from mixcut.ui.demo.backend_bridge import BackendBridge
         from mixcut.ui.demo.window import DemoController
@@ -187,13 +186,12 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self.controller = DemoController(self)
         self.controller.stateChanged.connect(self._refresh_topbar)
 
-        # 旧素材库页仍然构建：它当前持有素材勾选状态（_checked_paths），
-        # 并且承载后台探测/缩略图线程，新界面尚未接管这两件事。
-        # 其余旧页面（MixPage / SettingsPage / EnginePage / 旧工作台）
-        # 在改为新界面后被创建即 hide，且没有任何代码再使用它们，已整体移除。
-        self.page_library = library_page.LibraryPage(self)
-        # 旧素材库页虽然不显示，仍需要挂到 MainWindow，才能使用后台探测/缩略图线程。
-        self.page_library.setParent(self)
+        # 旧素材库页（mixcut.ui.library_page.LibraryPage）已整体移除：
+        #   · 素材勾选状态 → 宿主持有的 self.selection（解耦第2步）
+        #   · 后台探测/缩略图线程 → 本就归宿主 self.probe_worker（第3步）
+        #   · 播放器卡片挂载点 preview_slot → 不再使用（批次B）
+        # 可见的素材库是新界面 demo_library（mixcut.ui.demo.pages_library）。
+        # 其它旧页面（MixPage / SettingsPage / EnginePage / 旧工作台）更早移除。
         self.page_analyze = AnalyzePage(self)
 
         # 玩家卡片必须先建：它内部会包住 video_widget。
@@ -231,7 +229,6 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
         self.analysis = self.page_analyze
         self.tasks = self.demo_tasks
         self.settings_page = self.demo_settings
-        self.page_library.hide()
         # 旧页仍然保留做后台兼容，但不允许它们作为窗口子控件在左上角漏画碎片
         for _child in self.children():
             if isinstance(_child, QWidget) and _child is not self.shell \
@@ -267,7 +264,9 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
             return
         # 旧隐藏树自己也挂了 Ctrl+Z，同一窗口内两个同键 QShortcut 会互相抢成
         # activatedAmbiguously，两边都不触发；这里禁掉旧树的，由新 UI 统一接管。
-        legacy_tree = getattr(getattr(self, "page_library", None), "tree", None)
+        # 旧素材库页已移除，但它用的 self.tree 是宿主自己的 UndoableTreeWidget，
+        # 旧的撤销快捷键仍挂在上面，所以这段保留。
+        legacy_tree = getattr(self, "tree", None)
         sc = getattr(legacy_tree, "undo_shortcut", None)
         if sc is not None:
             sc.setEnabled(False)
@@ -375,9 +374,6 @@ class MainWindow(WindowChromeMixin, LibraryOpsMixin, PreviewPlayerMixin,
             self.demo_workbench.rebuild_strip()
         # 后台探测直接吃新 UI 素材清单的全部路径，不再依赖旧页卡片是否展开了嵌套目录。
         self._ensure_probe_worker().request(self._probe_paths())
-        page = getattr(self, "page_library", None)
-        if page is not None and hasattr(page, "refresh_cards"):
-            page.refresh_cards()
         if hasattr(self, "demo_workbench") and getattr(self, "player", None) is not None:
             cur = self.controller.current_clip()
             if cur.get("path"):
@@ -823,7 +819,7 @@ if __name__ == "__main__":
     _step("加载核心模块…", 10, 500)
     from mixcut.ui import theme as _ui_theme
     _step("加载素材库…", 25, 500)
-    from mixcut.ui import library_page
+    from mixcut.ui.demo import pages_library
     _step("加载MIX引擎…", 45, 400)
     from mixcut.ui import mix_page
     _step("加载任务中心…", 60, 300)

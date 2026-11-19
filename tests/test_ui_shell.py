@@ -145,13 +145,10 @@ def run(workdir):
 
     # ============ 4. 混剪流程 ============
     # 勾选全部素材后确认。
-    # 注意：confirm_materials 当前读的是旧素材库页的 page_library._checked_paths
-    # （新旧 UI 尚未解耦，见台账第十四阶段"新旧 UI 耦合"记录），
-    # 所以这里按它的真实数据源设置，而不是去改树节点选中态。
+    # 勾选状态由宿主持有的 MaterialSelection 统一持有（解耦第2步），
+    # 旧素材库页已在第4步移除，这里直接操作 win.selection。
     all_paths = [str(a), str(b)]
-    lib_page = getattr(win, "page_library", None)
-    if lib_page is not None and hasattr(lib_page, "_checked_paths"):
-        lib_page._checked_paths = set(all_paths)
+    win.selection.set_checked(all_paths)
     win.confirm_materials()
     win.refresh_selectors()
     print("    confirmed_paths:", len(getattr(win, "_confirmed_paths", [])))
