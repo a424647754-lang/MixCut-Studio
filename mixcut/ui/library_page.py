@@ -718,8 +718,15 @@ class LibraryPage(QWidget):
         self._apply_filter()
 
     def _probe_all(self):
-        w = self.window()
-        worker = getattr(w, "probe_worker", None)
+        # 探测线程本身由宿主 MainWindow 持有（probe_worker），本页只是调用方。
+        # 取宿主不能用 self.window()：旧页被挂在 QTabWidget 里，
+        # window() 会返回那个 TabWidget 而不是 MainWindow。
+        w = getattr(self, "owner_window", None)
+        if w is None:
+            w = self.window()
+            while w is not None and not hasattr(w, "probe_worker"):
+                w = w.parentWidget()
+        worker = getattr(w, "probe_worker", None) if w is not None else None
         if worker is None:
             return
         pending = [p for p in self._cards
