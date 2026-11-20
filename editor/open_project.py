@@ -27,14 +27,15 @@ from pathlib import Path
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
-        print("用法: python -m editor.open_project <工程文件>")
-        return 2
 
-    target = Path(argv[0])
-    if not target.is_file():
-        print("工程文件不存在：%s" % target)
-        return 2
+    # 不给参数 = 打开一个空白工程（侧边栏「打开剪辑器」入口用）。
+    # 早期这里直接报用法退出，导致用户从 MixCut 点进来必须先有工程文件。
+    target = None
+    if argv:
+        target = Path(argv[0])
+        if not target.is_file():
+            print("工程文件不存在：%s" % target)
+            return 2
 
     try:
         from PySide6.QtWidgets import QApplication
@@ -45,7 +46,7 @@ def main(argv=None):
         app.setApplicationName(T.APP_NAME)
         app.setApplicationDisplayName(T.APP_NAME)
 
-        window = MainWindow(str(target))
+        window = MainWindow(str(target) if target is not None else None)
         window.show()
         window.raise_()
         return app.exec()

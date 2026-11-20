@@ -224,20 +224,40 @@ def open_in_editor(project_path, *, wait=False):
     Returns:
         ``subprocess.Popen`` 对象；失败返回 None。
     """
+    return launch_editor(project_path, wait=wait)
+
+
+def launch_editor(project_path=None, *, wait=False):
+    """以独立进程启动剪辑器。
+
+    Args:
+        project_path: 要打开的工程；None = 打开空白工程
+        wait: True 时阻塞到退出（测试用）
+
+    Returns:
+        ``subprocess.Popen``；失败返回 None。
+
+    与 :func:`open_in_editor` 的区别：那个**必须有工程文件**，
+    这个允许不传，用于侧边栏的「打开剪辑器」入口。
+    """
     import subprocess
     import sys
 
-    target = Path(project_path)
-    if not target.is_file():
-        return None
+    if project_path is not None:
+        target = Path(project_path)
+        if not target.is_file():
+            return None
+    else:
+        target = None
 
-    # 工程包在仓库根目录下，把根目录放进 PYTHONPATH 让子进程能找到 editor
     repo_root = Path(__file__).resolve().parent.parent
     env = dict(os.environ)
     old = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (str(repo_root) + (os.pathsep + old if old else ""))
+    env["PYTHONPATH"] = str(repo_root) + (os.pathsep + old if old else "")
 
-    cmd = [sys.executable, "-m", "editor.open_project", str(target)]
+    cmd = [sys.executable, "-m", "editor.open_project"]
+    if target is not None:
+        cmd.append(str(target))
     try:
         proc = subprocess.Popen(cmd, cwd=str(repo_root), env=env,
                                 close_fds=True)

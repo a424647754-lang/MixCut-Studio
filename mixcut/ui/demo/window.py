@@ -217,6 +217,19 @@ class Sidebar(QWidget):
             self.items[key] = item
         lay.addStretch(1)
 
+        # ---- 打开剪辑器（第二十九阶段）----
+        # 放在底部状态卡**上方**：这是一个主动入口，用户随时想进去剪就能进，
+        # 不必等到混剪完成。剪辑器以独立进程启动（Qt 不允许同进程两个
+        # QApplication），所以点完立即返回，不会卡住当前窗口。
+        self.btn_editor = SoftButton("打开剪辑器", "secondary", "play",
+                                     height=34, radius=8)
+        self.btn_editor.setToolTip(
+            "在新窗口打开剪辑器，可对混剪结果做精细剪辑与调色")
+        self.btn_editor.clicked.connect(
+            lambda: win.controller.open_editor_window())
+        lay.addWidget(self.btn_editor)
+        lay.addSpacing(6)
+
         foot = QWidget()
         fl = QVBoxLayout(foot)
         fl.setContentsMargins(10, 10, 10, 10)
@@ -356,6 +369,35 @@ class DemoController(QObject):
 
     def usable_count(self):
         return max(0, self.visible_count() - (2 if self.filtered else 0))
+
+    def open_editor_window(self):
+        """侧边栏「打开剪辑器」：以独立进程启动剪辑器。
+
+        行为说明
+        --------
+        · 剪辑器不可用（缺依赖）→ 记日志说明，不弹窗打扰
+        · 已经开着 → 仍然再开一个（剪辑器支持多开，各自独立工程）
+        · 启动失败 → 记一条错误日志
+
+        用独立进程的原因见 ``mixcut.editor_bridge.launch_editor``：
+        Qt 不允许同一进程里有两个 ``QApplication``。
+        """
+        try:
+            from mixcut import editor_bridge as eb
+        except Exception as exc:      # noqa: BLE001
+            self.log("剪辑器 · 无法加载模块：%s" % exc)
+            return False
+
+        if not eb.available():
+            self.log("剪辑器 · 不可用（缺少 PySide6 等依赖）")
+            return False
+
+        proc = eb.launch_editor()
+        if proc is None:
+            self.log("剪辑器 · 启动失败")
+            return False
+        self.log("剪辑器 · 已在新窗口打开（PID %d）" % proc.pid)
+        return True
 
     def current_clip(self):
         for c in mock.CLIPS:
