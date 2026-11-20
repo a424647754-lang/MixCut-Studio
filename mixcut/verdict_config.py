@@ -383,10 +383,39 @@ class VerdictConfig:
             cfg.set_bad_ratio_level(2)
             cfg.min_score = 25.0
         elif name == "strict":
-            # 严格：全部维度都开，档位偏高（要抓就抓全）
+            # 严格：**只加强基础画质，不碰场景相关的画面内容维度**。
+            #
+            # ⚠ 2026-11-20 第二十八阶段修正
+            # ------------------------------
+            # 早期严格预设是「12 项全开 + 档位偏高 + bad_ratio 降到 35%」，
+            # 两个严叠加，实测在真实人像素材上 **6/6 帧全部命中、整段判废**：
+            #
+            #   手抖 5/6 (83%) —— 有人走动被当成手抖
+            #   空镜 3/6 (50%) —— 白背景画面边缘密度低
+            #   灰片 2/6 (33%) —— 白墙背景对比度偏低
+            #   色偏 1/6 (17%) —— 暖色调被判色偏
+            #
+            # 这四项都不是"素材差"，而是**拍摄场景的正常特征**。
+            # 严格模式应当"对画质更挑"，而不是"对任何风格都判废"。
+            #
+            # 现在：基础画质 6 项开、档位偏高（比均衡更严一档）；
+            #       画面内容只保留「空镜」「画面发灰」这两个相对客观的，
+            #       但档位留在「中」——
+            #       `empty` 的官方描述就写着「调高会误伤特写」，
+            #       白背景人像/产品特写的边缘密度天然就低，调高必误伤。
+            #       灰片/色偏/阴影/手抖交给用户按素材类型自己开。
+            # 差帧占比从 35% 放宽到 50%（与均衡一致）——
+            # 加强严格度靠"每帧的门槛"，而不是靠"少数帧就能否定整段"。
             for key in DIMENSIONS:
-                cfg.enabled[key] = True
-                cfg.levels[key] = 3
-            cfg.set_bad_ratio_level(3)
-            cfg.min_score = 40.0
+                if key in ("gray", "cast", "shadow", "shake"):
+                    cfg.enabled[key] = False
+                    cfg.levels[key] = 3
+                elif key in ("empty", "flat"):
+                    cfg.enabled[key] = True
+                    cfg.levels[key] = 2      # 留「中」：调高会误伤特写
+                else:
+                    cfg.enabled[key] = True
+                    cfg.levels[key] = 3      # 基础画质：比均衡严一档
+            cfg.set_bad_ratio_level(2)      # 50%，与均衡一致
+            cfg.min_score = 35.0
         return cfg
