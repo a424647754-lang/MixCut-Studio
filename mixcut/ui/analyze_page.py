@@ -4015,47 +4015,84 @@ class AnalyzePage(QWidget):
         所以改规则是纯计算的事。相比整轮重跑（要重新调 ffmpeg 解码），
         这里快几个数量级。
 
-        只处理已经分析过的片段；没分析过的片段仍然是空的，需要正常启动分析。
+        ⚠ 2026-11-20 第二十五阶段修正
+        -----------------------------
+        上一版直接读 ``self._roster`` / ``self._items``，但这两个属性在
+        **AnalysisWorker** 上，``AnalyzePage`` 自己没有——于是第一行就
+        ``AttributeError``，函数直接中断，后面的卡片刷新和统计刷新
+        **一次都没执行过**。
+
+        用户看到的现象就是：在「可以试试」里点了应用，
+        日志说「正在按新规则重新判定」，但卡片不变、右上角「废片段」
+        条数也不动。
+
+        现在改为从 worker 取数据，并且不再让异常静默吞掉：
+        每一步失败都写日志，至少让问题可见。
+
+        Returns:
+            结论发生变化的片段数；无法执行时返回 -1。
         """
-        entries = [e for e in self._roster
-                   if e["key"] in self._items]
+        worker = getattr(self, "_worker", None)
+        if worker is None:
+            self.win.controller.log(
+                "分析中心 · 重新判定失败：后台分析器不存在")
+            return -1
+        roster = getattr(worker, "_roster", None) or []
+        items = getattr(worker, "_items", None) or {}
+        if not roster or not items:
+            # 还没分析过任何片段：没有可重新判定的东西，不算错误
+            return 0
+
+        entries = [e for e in roster if e["key"] in items]
         if not entries:
             return 0
+
         changed = 0
+        failed = 0
         for entry in entries:
-            cv_frames = self._required_frames(entry)
             try:
-                item = self._assemble(entry, cv_frames)
+                cv_frames = worker._required_frames(entry)
+                item = worker._assemble(entry, cv_frames)
             except Exception:
+                failed += 1
                 continue
-            before = self._items.get(entry["key"]) or {}
+            before = items.get(entry["key"]) or {}
             if bool(before.get("is_bad")) != bool(item.get("is_bad")):
                 changed += 1
-            self._items[entry["key"]] = item
-        # 刷新界面：卡片、统计、混剪池、门控
-        self._results = [self._items[e["key"]] for e in self._roster
-                         if e["key"] in self._items]
+            items[entry["key"]] = item
+
+        if failed:
+            self.win.controller.log(
+                "分析中心 · 重新判定：%d 段跳过（聚合失败）" % failed)
+
+        # 把 worker 的结果同步回页面
+        self._results = [items[e["key"]] for e in roster
+                         if e["key"] in items]
         # 逐行刷新已有卡片（不重建，避免丢选中态和滚动位置）
         for row in range(len(self._results)):
             try:
                 self._refresh_list_row(row)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.win.controller.log(
+                    "分析中心 · 刷新第 %d 行失败：%s" % (row + 1, exc))
         for fn_name in ("_refresh_stats", "_refresh_pool_ui"):
             fn = getattr(self, fn_name, None)
             if callable(fn):
                 try:
                     fn()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.win.controller.log(
+                        "分析中心 · %s 失败：%s" % (fn_name, exc))
         rs = getattr(self.win, "refresh_selectors", None)
         if callable(rs):
             try:
                 rs()
             except Exception:
                 pass
+        n_bad = sum(1 for r in self._results if r.get("is_bad"))
         self.win.controller.log(
-            "分析中心 · 重新判定完成：%d 段结论有变化（未重新解码素材）" % changed)
+            "分析中心 · 重新判定完成：%d 段结论有变化，当前废片段 %d 段"
+            "（未重新解码素材）" % (changed, n_bad))
         return changed
 
     def _refresh_list_row(self, row):
