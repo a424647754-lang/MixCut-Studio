@@ -610,6 +610,62 @@ class MixTaskMixin:
             f"{names}\n\n保存目录：\n{Path(items[0]['draft_path']).parent}"
             f"{gap_hint}{voice}",
         )
+        # 最后询问是否用内置剪辑器打开（第二十九阶段）。
+        # 放在剪映提示之后：剪映草稿是主产物，编辑器是"想精修时才用"的附加项。
+        self._offer_open_in_editor(items)
+
+    def _offer_open_in_editor(self, items):
+        """问用户要不要用内置剪辑器打开刚生成的混剪。
+
+        只有在**剪辑器可用**且**拿到了时间线**时才问。
+        没时间线（旧版本 worker 或异常路径）就安静跳过，不打扰用户。
+        """
+        try:
+            from mixcut import editor_bridge as eb
+        except Exception:
+            return
+        if not eb.available():
+            return
+
+        # 取第一份带时间线的结果
+        timeline = None
+        for item in items or []:
+            tl = item.get("_timeline")
+            if isinstance(tl, dict) and tl.get("clips"):
+                timeline = tl
+                break
+        if timeline is None:
+            return
+
+        answer = QMessageBox.question(
+            self, "用剪辑器打开",
+            "混剪已完成。要现在用内置剪辑器打开它继续精修吗？\n\n"
+            "剪辑器会以独立窗口启动，不影响当前程序。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            # 工程写到草稿目录旁边，用户以后能直接双击打开
+            base_dir = Path(items[0].get("draft_path") or ".").parent
+            stem = str(items[0].get("draft_name") or "MixCut_工程")
+            out = eb.save_editor_project(
+                timeline, base_dir / (stem + eb.EDITOR_SUFFIX),
+                name=stem)
+            proc = eb.open_in_editor(out)
+            if proc is None:
+                QMessageBox.warning(
+                    self, "打开失败",
+                    f"剪辑器启动失败。\n工程已保存到：\n{out}")
+            else:
+                self.mix_log.appendPlainText(f"已用剪辑器打开：{out}")
+                if getattr(self, "_log_sink", None):
+                    self._log_sink(f"已用剪辑器打开：{out}", "info")
+        except Exception as exc:      # noqa: BLE001 - 打不开不该影响主流程
+            QMessageBox.warning(
+                self, "打开失败", "剪辑器启动出错：%s" % exc)
 
     def mix_on_failed(self, message):
         self.mix_start_btn.setEnabled(True)

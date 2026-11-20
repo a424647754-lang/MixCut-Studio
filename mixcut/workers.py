@@ -327,6 +327,13 @@ class MixBuildWorker(BaseWorker):
                 draft_name=name_i,
                 force_target=use_custom,
             )
+            # 把时间线一并挂到结果上（第二十九阶段）。
+            # 剪映草稿只记录了"怎么生成"，没有一个结构化的时间线可供编辑器使用。
+            # 这里把 mb.build_mix_timeline 的产物原样带出去，
+            # 由 mixcut.editor_bridge 转成剪辑器工程。
+            # 注意：result 会被序列化进任务历史，所以这里只放内存引用，
+            # 发送给界面前由调用方决定要不要落盘。
+            result["_timeline"] = project
             results.append(result)
             self.progress.emit(
                 int(p_end),
