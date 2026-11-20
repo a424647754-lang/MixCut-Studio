@@ -202,14 +202,232 @@ def merge_cuts(cuts, tolerance=0.08):
 # ---------------------------------------------------------
 
 def _amverge_cuts(path, min_keep):
+    """amverge 画面内容镜头切换检测（Canny 边缘余弦相似度）。
+
+    ⚠ 历史问题（2026-11-20 修正）
+    ----------------------------
+    旧实现调用 ``detect_scenes_by_keyframe()``，返回的是**编码器关键帧(I 帧)时间戳**，
+    不是画面切换点。I 帧间隔由 GOP 决定，与画面内容无关：
+    实测 GOP=5s 的素材，切点精确落在 5/10/15/20/25/30，
+    且这些位置的前后帧差异与「随机位置」几乎相同（1.44 倍基线）。
+
+    现改为 ``detect_cuts_by_edge()``：在关键帧窗口内用 Canny 边缘图的
+    平均池化余弦不相似度找硬切。同一素材实测差异比 **3.37 倍基线**，
+    切点真正对应画面变化。
+
+    参数选择的依据（实测，见台账第二十阶段）
+    ----------------------------------------
+    · ``radius=0.6``（amverge 默认）：质量最好（3.37x）。
+      窗口只覆盖每个 GOP 中心附近 1.2 秒，但 I 帧本身就是编码器认为
+      「值得独立编码」的位置，真实硬切绝大多数落在 I 帧附近。
+    · ``radius=2.5``（全片无缝）：切点数 34，但掺入大量弱信号
+      （前后差异 8~11 的「轻微变化」），差异比降到 2.34x。
+      **宁可漏检也不误检**，因此不用全覆盖半径。
+
+    保留关键帧能力
+    --------------
+    ``_amverge_keyframe_cuts()`` 保留原实现，供「需要无损切割点」的场景
+    显式调用；两者语义不同，不再混用。
+
+    Returns:
+        ``[(time, "cut", "amverge"), ...]``，与其它检测器结构一致。
+    """
+    from amverge.core.detection.edge import detect_cuts_by_edge
+    # 内部用固定的最小间隔做二次合并。
+    #
+    # 为什么不直接用调用方传进来的 min_keep：
+    # run_filter 传的是 analysis.DEFAULT_OPTIONS["min_keep_duration"]=0.05 秒，
+    # 那是「片段最短时长」的概念，不是「切点最小间隔」。
+    # 用它当切点间隔会放出大量 0.13 秒间隔的密集切点（实测 40 个），
+    # 显著拉低可信度（1.64x 基线，强切点仅 10/20）。
+    # 见台账第二十阶段。
+    merge_gap = max(float(min_keep or 0.0), _AMVERGE_MIN_CUT_GAP)
+    raw = detect_cuts_by_edge(
+        path,
+        threshold=_AMVERGE_EDGE_THRESHOLD,
+        radius=_AMVERGE_EDGE_RADIUS,
+        blocksize=_AMVERGE_EDGE_BLOCKSIZE,
+        min_duration=merge_gap,
+    )
+    cuts = []
+    for t in raw or []:
+        t = float(t)
+        if t > 0:
+            cuts.append((t, "cut", "amverge"))
+    # 用真实像素差复核，过滤边缘噪声造成的误检（见 _amverge_verify_cuts）
+    return _amverge_verify_cuts(path, cuts)
+
+
+def _amverge_verify_cuts(path, cuts):
+    """用真实像素差复核边缘检测结果，过滤噪声误检。
+
+    为什么需要这一步
+    ----------------
+    ``detect_cuts_by_edge`` 用的是「Canny 边缘图的池化余弦不相似度」。
+    有噪点/纹理的画面里，单帧噪声就能让边缘图轻微抖动、余弦值越过阈值，
+    产生误检。实测合成素材：10 个切点里 8 个的前后帧真实差异 < 2（纯噪声）。
+
+    边缘不相似度衡量「边缘结构变化」，用户关心「画面是否真的换了」，
+    两者不完全等价。所以这里再用**原始灰度帧平均绝对差**复核一次。
+
+    这是**降低误检**，不是增加切点——宁可漏掉极弱转场，
+    也不把噪声当成镜头切换。
+
+    Returns:
+        过滤后的切点；取帧失败或复核异常时**保留原切点**，不让检测整体失败。
+    """
+    if not cuts:
+        return cuts
+    try:
+        import av
+        import numpy as np
+    except Exception:
+        return cuts
+
+    kept = []
+    try:
+        with av.open(str(path)) as probe:
+            fps = float(probe.streams.video[0].average_rate or 25.0)
+    except Exception:
+        return cuts
+    half = max(1.0 / max(fps, 1.0), 0.02)
+
+    def grab(t):
+        """取 >= t 的第一帧。
+
+        每次重新 open 而不是复用同一个 container：
+        连续在同一 container 上 seek 两次取 t±half，PyAV 的解码器状态
+        会互相干扰，实测两次会取到同一帧、差异恒为 0，
+        结果把真实切点也当成噪声滤掉。
+        """
+        try:
+            with av.open(str(path)) as c2:
+                st2 = c2.streams.video[0]
+                c2.seek(int(max(0.0, t) * 1_000_000),
+                        any_frame=False, backward=True)
+                for fr in st2.decode(st2):
+                    if fr.time is None:
+                        continue
+                    if float(fr.time) >= t:
+                        return fr.reformat(width=320, height=180,
+                                           format="gray").to_ndarray()
+        except Exception:
+            return None
+        return None
+
+    try:
+        for item in cuts:
+            t = float(item[0])
+            a = grab(max(0.0, t - half))
+            b = grab(t + half)
+            if a is None or b is None or a.shape != b.shape:
+                kept.append(item)      # 取不到帧不判死，保留
+                continue
+            d = float(np.abs(a.astype(np.int16) -
+                             b.astype(np.int16)).mean())
+            if d >= _AMVERGE_MIN_PIXEL_DIFF:
+                kept.append(item)
+    except Exception:
+        return cuts        # 复核出错退回未过滤结果
+
+    # 二次过滤：去掉「密集弱切点」簇。
+    #
+    # 实测：某些图案（高频网格/强纹理）会让边缘图持续抖动，
+    # 检测器在中段连续报出 15.08/15.68/16.32/16.96... 这类等距切点，
+    # 个个差异只有 0.5~1.0（真实硬切是 13~30）。
+    # 这类点在「间隔很近 + 差异很低」两个条件同时成立时必然是噪声，
+    # 直接合并掉，只保留其中差异最大的那个代表。
+    if len(kept) >= 2:
+        kept = _amverge_drop_noise_clusters(path, kept, grab, half)
+    return kept
+
+
+def _amverge_drop_noise_clusters(path, cuts, grab, half):
+    """把「密集 + 弱」的切点簇合并成一个代表点。
+
+    判定规则（两条同时满足才算噪声簇）：
+      1. 相邻切点间隔 < ``_AMVERGE_NOISE_GAP``（默认 1.0 秒）
+      2. 该切点的画面差异 < ``_AMVERGE_NOISE_DIFF``（默认 4.0）
+
+    保留簇内差异最大的那个点，其余丢弃。这样：
+      · 真实切点附近偶尔出现的 1~2 个弱切点会被合并，不会重复出片
+      · 真实的密集快切（差异大）不受影响
+    """
+    scored = []
+    for item in cuts:
+        t = float(item[0])
+        a = grab(max(0.0, t - half))
+        b = grab(t + half)
+        d = 0.0
+        if a is not None and b is not None and a.shape == b.shape:
+            d = float(np.abs(a.astype(np.int16) -
+                             b.astype(np.int16)).mean())
+        scored.append((t, d, item))
+
+    result = []
+    group = []
+
+    def flush(grp):
+        if not grp:
+            return
+        # 簇内差异最大的作为代表
+        best = max(grp, key=lambda x: x[1])
+        result.append(best[2])
+
+    for entry in scored:
+        t, d, _item = entry
+        is_weak = d < _AMVERGE_NOISE_DIFF
+        if not is_weak:
+            flush(group)
+            group = []
+            result.append(entry[2])
+            continue
+        if group and (t - group[-1][0]) >= _AMVERGE_NOISE_GAP:
+            flush(group)
+            group = []
+        group.append(entry)
+    flush(group)
+
+    result.sort(key=lambda x: float(x[0]))
+    return result
+
+
+def _amverge_keyframe_cuts(path, min_keep):
+    """【保留】关键帧切分点：按 I 帧时间戳切，保证可无损 stream-copy。
+
+    这是 amverge 的原始能力，与「镜头切换检测」语义不同：
+    · 本函数回答「在哪切能不重编码」
+    · ``_amverge_cuts()`` 回答「画面在哪变了」
+
+    默认流程不再使用它，保留供需要无损切点时显式调用。
+    """
     from amverge.core.detection.keyframe import detect_scenes_by_keyframe
     raw = detect_scenes_by_keyframe(path, min_duration=min_keep)
     cuts = []
     for s, _e in raw or []:
         s = float(s)
         if s > 0:
-            cuts.append((s, "cut", "amverge"))
+            cuts.append((s, "keyframe", "amverge"))
     return cuts
+
+
+# amverge 边缘检测参数（实测调优，见台账第二十阶段）
+# threshold: 余弦不相似度阈值。0.15 能命中真实切点；再高会漏检（0.35 时 2/3）
+_AMVERGE_EDGE_THRESHOLD = 0.15
+# radius: 每个关键帧窗口半径。0.6 质量最优（切点/基线 3.37x）；
+#         放大到 2.5 全片无缝反而掺入弱信号（2.34x），故不用
+_AMVERGE_EDGE_RADIUS = 0.6
+# blocksize: 边缘图池化块。7 比 3 更能压制噪声（切点 19→10，命中仍 3/3）
+_AMVERGE_EDGE_BLOCKSIZE = 7
+# 切点最小间隔（秒）：比这更近的切点合并成一个
+_AMVERGE_MIN_CUT_GAP = 0.5
+# 复核门槛：切点前后两帧的灰度平均绝对差低于此值 → 判定为噪声误检，丢弃。
+# 实测真实硬切差异 13~30，噪声误检 0.5~2，取 5.0 作为分界。
+_AMVERGE_MIN_PIXEL_DIFF = 5.0
+# 噪声簇判定：相邻弱切点间隔小于此值（秒）→ 视为同一簇
+_AMVERGE_NOISE_GAP = 1.0
+# 噪声簇判定：画面差异低于此值 → 视为「弱切点」
+_AMVERGE_NOISE_DIFF = 4.0
 
 
 def _amverge_waste(path):
@@ -387,11 +605,24 @@ def cache_key_config(config):
     同时也包含素材自己的画面/静音检测开关，避免两套开关各算一套却
     共用同一个缓存。进度回调之类不影响结果的键不会被包含（run_filter
     只认固定字段，多余的键会被忽略）。
+
+    **检测器版本标记**：``_DETECTOR_REVISION`` 参与缓存键。
+    2026-11-20 把 amverge 从「关键帧切分」换成「边缘内容检测」，
+    同样的配置现在会产生不同的 ``shot_cuts``。不把这个版本写进键里，
+    用户会读到旧算法算出的切点，界面看起来正常但结果是错的。
     """
     cfg = dict(config or {})
     cfg.pop("progress_cb", None)
     cfg.pop("cancel_check", None)
+    cfg["_detector_revision"] = _DETECTOR_REVISION
     return cfg
+
+
+# 检测算法版本：改动任何「会产生不同 shot_cuts 结果」的检测逻辑时 +1。
+# 作用：让基于旧算法的缓存自动失效（见 cache_key_config）。
+#   v1 = amverge 用关键帧时间戳（错误：那是 GOP，不是画面切换）
+#   v2 = amverge 用 Canny 边缘余弦相似度（2026-11-20）
+_DETECTOR_REVISION = 2
 
 
 def _emit(progress_cb, fraction, message):
