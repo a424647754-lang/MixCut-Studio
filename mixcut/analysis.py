@@ -182,19 +182,27 @@ def analyze_source(source_id, path, options, progress_cb=None, cancel_check=None
             # OpenCV 不可用或单素材解码失败时，保留原有规则检测结果，避免中断整批任务。
             quality_segments = []
 
-    return {
-        "source": tl.make_source(source_id, path, duration),
-        "junk": [
-            tl.make_junk(source_id, s, e, types)
-            for s, e, types in junk
-        ],
-        "_junk_merged": junk,   # 内部使用，重建时方便
-        "_quality_segments": quality_segments,
-        "_silent_track": whole_silent,   # 空音轨标记（界面/其他模块可用）
-        # 契约字段：本路径不跑镜头检测，明确标记为「没测过」而不是「没找到」
-        "_scenes": None,
-        "_analysis_schema": analysis_schema.ANALYSIS_SCHEMA,
-    }
+    # 统一走 analysis_schema.make_item 构造（第二十二阶段）。
+    # 之前这里是手写字典，只手动补了 _scenes / _analysis_schema，
+    # 字段集合与 filter_engine / workers 两条路径靠人工对齐，
+    # 任何一方新增可选字段另一方都可能漏掉。
+    # make_item 会把 REQUIRED_KEYS 与 OPTIONAL_DEFAULTS 全部补齐。
+    item = analysis_schema.make_item(
+        tl.make_source(source_id, path, duration),
+        junk=[tl.make_junk(source_id, s, e, types) for s, e, types in junk],
+        junk_merged=junk,
+        # 本路径不跑镜头检测：明确 None（没测过），而不是 []（测了但为空）
+        _scenes=None,
+        _quality_segments=quality_segments,
+        _silent_track=whole_silent,
+    )
+    # 生产出口强制校验：结构不合格立刻暴露，而不是等到混剪阶段才出怪问题
+    problems = analysis_schema.check(item)
+    if problems:
+        raise RuntimeError(
+            "素材分析结果结构不合法（%s）：%s"
+            % (Path(path).name, "；".join(problems)))
+    return item
 
 
 def analyze_sources(paths, options=None, progress_cb=None, cancel_check=None):

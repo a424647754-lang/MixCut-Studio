@@ -298,11 +298,11 @@ class MixBuildWorker(BaseWorker):
             if self.transition_options.get("enabled"):
                 tr.apply_transition_rules(project, self.transition_options)
 
-            # ---- 成片自检（第二十一阶段 21.7）----
-            # 放在「生成草稿之前」：时间线有问题就���用户看，
-            # 而不是先写一份可能有问题的草稿再让用户在剪映里发现。
-            # 自检只读时间线、不修改它，也不阻断流程——结果写进日志和前端的
-            # summary，由用户决定要不要调整参数重来。
+            # ---- 成片自检（第二十二阶段）----
+            # 放在「最终时间线成形之后（含配乐/转场）、写草稿之前」：
+            # 此时 project 就是即将落盘的那一份，检查的是真结果。
+            # error 级问题会抛 RuntimeError 阻止落盘（见 _run_delivery_check），
+            # warn 只警告不阻断。
             self._run_delivery_check(project, i + 1, project_count)
 
             name_i = (
@@ -371,12 +371,29 @@ class MixBuildWorker(BaseWorker):
     # 成片自检（第二十一阶段 21.7）
     # -------------------------------------------------
     def _run_delivery_check(self, project, index, total):
-        """对刚生成的时间线做一次自检，把结果写进日志并缓存到 self。
+        """对刚生成的时间线做一次自检，返回是否允许继续生成草稿。
 
-        不抛异常、不中断流程：自检本身失败（比如代码 bug）不应该让
-        已经算好的混剪结果作废。所有异常都在这里吞掉并记日志。
+        分级处理（2026-11-20 第二十二阶段）
+        ----------------------------------
+        · **error**（会让剪映打不开/黑帧/时间线错乱的）：**阻止落盘**，
+          直接抛 RuntimeError 让任务失败，并由上层把原因告诉用户。
+          这样不会把一份注定有问题的草稿写进剪映目录。
+        · **warn / info**（观感问题：重复、节奏、来源集中）：**只警告**，
+          照常生成草稿。用户可能就想要这个效果，不能替他做决定。
 
-        结果保存到 ``self.delivery_reports``（list），供 built 信号带出。
+        自检自身出错（代码 bug）时**不阻断**：记一条日志后放行，
+        已经算好的混剪结果不应该因为自检崩溃而作废。
+
+        Args:
+            project: 时间线字典
+            index: 第几个工程（1 基）
+            total: 工程总数
+
+        Returns:
+            True = 允许继续生成草稿
+
+        Raises:
+            RuntimeError: 存在 error 级问题时
         """
         try:
             from . import delivery_check as dc
@@ -392,7 +409,7 @@ class MixBuildWorker(BaseWorker):
             self.progress.emit(
                 0, "成片自检未能执行（不影响草稿生成）：%s"
                 % traceback.format_exc().splitlines()[-1])
-            return
+            return True
 
         if not hasattr(self, "delivery_reports"):
             self.delivery_reports = []
@@ -405,11 +422,12 @@ class MixBuildWorker(BaseWorker):
 
         if errors == 0 and warns == 0:
             self.progress.emit(0, "%s成片自检通过（无异常）" % prefix)
-            return
+            return True
 
-        self.progress.emit(
-            0, "%s成片自检：%d 个错误 / %d 个提醒"
-            % (prefix, errors, warns))
+        level_text = ("%d 个错误 / %d 个提醒" % (errors, warns)
+                      if errors else "%d 个提醒" % warns)
+        self.progress.emit(0, "%s成片自检：%s" % (prefix, level_text))
+
         # 输出前 5 条，避免日志被刷屏
         for it in (report.get("issues") or [])[:5]:
             self.progress.emit(
@@ -418,6 +436,19 @@ class MixBuildWorker(BaseWorker):
         if fixes:
             for f in fixes[:3]:
                 self.progress.emit(0, "  → 建议：%s" % f.get("action", ""))
+
+        if errors:
+            # 只列 error 级的，避免用户被 warn 淹没
+            err_titles = [it.get("title", "") for it in
+                          (report.get("issues") or [])
+                          if it.get("level") == dc.ERROR][:3]
+            raise RuntimeError(
+                "成片自检未通过，已中止生成草稿（避免写出有问题的工程）：%s"
+                % "；".join(err_titles))
+
+        self.progress.emit(
+            0, "%s这些问题只影响观感，草稿照常生成" % prefix)
+        return True
 
     # -------------------------------------------------
     # 素材分析（带缓存）
@@ -543,7 +574,7 @@ class MixBuildWorker(BaseWorker):
                 continue
             seen.add(path)
             duration = float(frag.get("source_duration") or 0.0)
-            stubs.append(analysis_schema.make_item(
+            stub = analysis_schema.make_item(
                 analysis_schema.make_source(len(seen), path, duration),
                 junk=[],
                 junk_merged=[],
@@ -551,7 +582,14 @@ class MixBuildWorker(BaseWorker):
                 # 而不是 []（跑了但结果为空）。
                 _quality_segments=None,
                 _scenes=None,
-            ))
+            )
+            # 生产出口强制校验（第二十二阶段）
+            problems = analysis_schema.check(stub)
+            if problems:
+                raise RuntimeError(
+                    "片段池条目的分析结构不合法（%s）：%s"
+                    % (Path(path).name, "；".join(problems)))
+            stubs.append(stub)
             self._emit_source(
                 path, "cached",
                 {"valid_segments": sum(

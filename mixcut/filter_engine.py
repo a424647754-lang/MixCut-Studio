@@ -901,7 +901,7 @@ def to_mix_analysis(paths, filter_result):
         cuts = sorted({float(c["time"]) for c in src["shot_cuts"]
                        if 0.0 < float(c["time"]) < duration})
         scenes = [(t, None) for t in cuts] or None
-        analysis.append(analysis_schema.make_item(
+        item = analysis_schema.make_item(
             tl.make_source(idx, path, duration),
             junk=[tl.make_junk(idx, s, e, sorted(t)) for s, e, t in junk],
             junk_merged=junk,
@@ -910,5 +910,12 @@ def to_mix_analysis(paths, filter_result):
             _scenes=scenes,
             _quality_segments=None,     # 本路径不跑画质窗口
             shot_cuts=[float(c["time"]) for c in src["shot_cuts"]],
-        ))
+        )
+        # 生产出口强制校验（第二十二阶段）
+        problems = analysis_schema.check(item)
+        if problems:
+            raise RuntimeError(
+                "引擎分析结果结构不合法（%s）：%s"
+                % (Path(path).name, "；".join(problems)))
+        analysis.append(item)
     return analysis

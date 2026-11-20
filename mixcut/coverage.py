@@ -212,25 +212,94 @@ class CoverageTracker:
         """coverage=0 时完全关闭，行为与改造前一致。"""
         return self.coverage > 0.0 and self.weight > 0.0
 
+    def bucket_range(self, sid, start, end):
+        """返回 [start, end) 覆盖到的所有桶索引及其在里面停留的秒数。
+
+        这是跨桶分摊的基础（第二十二阶段修正）。
+
+        早期实现只按**片段起点**定桶，把整段时长记进那一个桶：
+
+            桶 A: 0~10 秒，桶 B: 10~20 秒
+            片段 8~13 秒 → 5 秒全记进桶 A
+
+        但其中 2 秒其实取自桶 B。长期下来，「某个桶被用了多少」
+        与实际取材分布不符——正是 coverage 想度量的东西。
+
+        Returns:
+            ``{bucket_index: seconds}``，各值之和等于片段时长（不超过素材边界）。
+        """
+        n = self.counts.get(sid, 1)
+        dur = self.durations.get(sid, 0.0)
+        if n <= 1 or dur <= 0:
+            return {0: max(0.0, float(end) - float(start))}
+
+        width = dur / n
+        s = max(0.0, float(start))
+        e = min(float(dur), float(end))
+        if e <= s:
+            return {}
+
+        out = {}
+        b0 = bucket_of(s, dur, n)
+        b1 = bucket_of(max(s, e - 1e-9), dur, n)
+        for b in range(b0, b1 + 1):
+            lo = b * width
+            hi = min(dur, (b + 1) * width)
+            overlap = min(e, hi) - max(s, lo)
+            if overlap > 1e-9:
+                out[b] = out.get(b, 0.0) + overlap
+        return out
+
     def bucket(self, sid, start):
+        """片段**起点**所在的桶（仅用于「从哪个桶开始」这类粗判断）。"""
         n = self.counts.get(sid, 1)
         return bucket_of(start, self.durations.get(sid, 0.0), n)
 
-    def penalty(self, sid, start):
+    def penalty(self, sid, start, end=None):
+        """取材惩罚（负数越小越不容易被选中）。
+
+        给出 ``end`` 时按**覆盖到的所有桶**分别算惩罚并相加——
+        跨桶片段会同时为其触及的每个桶承担超配额代价。
+        这正是「8~13 秒的片段不该全部记进桶 A」的落地方式。
+
+        惩罚量按「该桶将因这次取材变成多少用量」计算：
+        用 ``used + 本次分摊秒数`` 与上限比较，超多少罚多少。
+
+        不给 ``end`` 时退化为「只看起点所在桶」（兼容旧调用）。
+        """
         if not self.enabled:
             return 0.0
-        b = self.bucket(sid, start)
-        used = self.usage.get(sid, {}).get(b, 0.0)
         ceiling = self.ceilings.get(sid, 1e-6)
-        return coverage_penalty(used, ceiling, weight=self.weight,
-                                cap=self.cap)
+
+        if end is None:
+            b = self.bucket(sid, start)
+            used = self.usage.get(sid, {}).get(b, 0.0)
+            return coverage_penalty(used, ceiling, weight=self.weight,
+                                    cap=self.cap)
+
+        shares = self.bucket_range(sid, start, end)
+        if not shares:
+            return 0.0
+        total = 0.0
+        for b, sec in shares.items():
+            if sec <= 1e-6:
+                continue
+            used = self.usage.get(sid, {}).get(b, 0.0)
+            total += coverage_penalty(used + sec, ceiling,
+                                      weight=self.weight, cap=self.cap)
+        return total
 
     def record(self, sid, start, seconds):
+        """把一次取材记进覆盖统计。
+
+        ``start`` 是片段起点，``seconds`` 是时长；按实际跨桶范围分摊。
+        """
         if sid not in self.usage:
             self.usage[sid] = {}
-        b = self.bucket(sid, start)
-        self.usage[sid][b] = self.usage[sid].get(b, 0.0) + max(
-            0.0, float(seconds or 0.0))
+        s = float(start)
+        e = s + max(0.0, float(seconds or 0.0))
+        for b, sec in self.bucket_range(sid, s, e).items():
+            self.usage[sid][b] = self.usage[sid].get(b, 0.0) + sec
 
     def report(self):
         out = {}

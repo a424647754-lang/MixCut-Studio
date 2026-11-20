@@ -408,9 +408,10 @@ def _candidate_score(idx, ranges, state, t_now, tags_map, level, weights):
     # 8) 时间覆盖（Coverage）：防止成片过度集中在素材的某一小段。
     #    完全由 CoverageTracker 决定；coverage=0 时它未启用、恒返回 0，
     #    行为与改造前一致。
+    #    传入 end 使跨桶片段按实际覆盖范围分摊惩罚（第二十二阶段）。
     tracker = state.get("coverage")
     if tracker is not None:
-        score += tracker.penalty(sid, rng["start"])
+        score += tracker.penalty(sid, rng["start"], rng["end"])
 
     # 9) 视觉多样性：与最近几个镜头「画面雷同」时扣分。
     #    只看 source_id 不够——三个不同文件可以都是人脸近景，连排照样单调。

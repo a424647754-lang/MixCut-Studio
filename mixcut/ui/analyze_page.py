@@ -508,11 +508,15 @@ class AnalysisWorker(QThread):
                     "key": key, "path": path, "name": name,
                     "seg_index": si, "seg_start": s, "seg_end": e,
                     "duration": duration, "fps": fps, "total_frames": total,
-                    # 镜头级分段信息（第二十一阶段），供诊断与混剪使用。
-                    # segmented_by="window" 表示回退到了固定窗口，
-                    # 后续模块据此知道这次不是按镜头切的。
-                    "segmented_by": ("shot" if shot_info.get("ok")
-                                     else "window"),
+                    # 镜头级分段信息（第二十二阶段）。
+                    # segmented_by 只反映「最终用了哪种分段方式」，
+                    # 与「检测器是否成功」分开：
+                    #   detection_ok=False + window → 检测失败，回退
+                    #   detection_ok=True  + window → 单镜头/切点不可用，回退
+                    #   detection_ok=True  + shot   → 真正按镜头切
+                    "segmented_by": str(shot_info.get("segmentation_mode")
+                                        or "window"),
+                    "shot_detection_ok": bool(shot_info.get("detection_ok")),
                     "shot_source": shot_info.get("source") or "",
                     "shot_fallback": shot_info.get("error") or "",
                 }
@@ -584,13 +588,29 @@ class AnalysisWorker(QThread):
     def _segments_by_shots(self, path, duration):
         """按镜头边界分段；拿不到就用固定窗口。
 
+        状态语义（第二十二阶段修正）
+        ---------------------------
+        早期版本只有一个 ``ok`` 字段，既表示「检测器跑成功了吗」，
+        又被 ``_build_roster`` 当成「是不是按镜头切的」，于是出现：
+
+            单镜头长素材 → 检测器成功但没有切点 → 回退固定窗口
+            → ok 仍为 True → 被标记成 segmented_by="shot"
+
+        实际是固定窗口，却对外声称镜头级分段。现在拆成两个独立字段：
+
+        · ``detection_ok``    检测器是否成功执行（没有抛异常）
+        · ``segmentation_mode`` 最终采用的分段方式："shot" / "window"
+
+        单镜头素材是 detection_ok=True + segmentation_mode="window"，
+        既不冤枉检测器，也不会把固定窗口伪装成镜头分段。
+
         Returns:
             (segments, shots)
-            shots = {"cuts": [...], "source": "amverge|scenedetect|...",
-                     "ok": bool, "error": str}
-            失败时 shots["ok"]=False 且 cuts=[]，调用方据此回退。
+            shots = {"cuts", "source", "detection_ok", "segmentation_mode",
+                     "error"}
         """
-        shots = {"cuts": [], "source": "", "ok": False, "error": ""}
+        shots = {"cuts": [], "source": "", "detection_ok": False,
+                 "segmentation_mode": "window", "error": ""}
         if duration <= 0:
             return self._split_segments(duration), shots
 
@@ -598,27 +618,35 @@ class AnalysisWorker(QThread):
             cuts, source = self._detect_shot_cuts(path)
         except Exception as exc:      # noqa: BLE001 - 记录后回退，不中断分析
             shots["error"] = "%s: %s" % (type(exc).__name__, exc)
+            shots["detection_ok"] = False
+            shots["segmentation_mode"] = "window"
             return self._split_segments(duration), shots
 
+        # 走到这里说明检测器成功执行了（没抛异常）
+        shots["detection_ok"] = True
+        shots["source"] = source
+        shots["cuts"] = list(cuts)
+
         if not cuts:
-            # 没检测到切点：可能是单镜头长片，也可能是检测器没跑成。
-            # 单镜头长片也应该能切，所以回退固定窗口。
-            shots["ok"] = bool(source)
-            shots["source"] = source
+            # 单镜头长素材：检测成功但确实没有切点。
+            # 用固定窗口是为了还能切出片段可用的区间，
+            # 但**不能说这是镜头级分段**。
+            if not source:
+                # 连检测器都没跑起来（比如模块缺失），不算「成功执行」
+                shots["detection_ok"] = False
+                shots["error"] = "没有可用的镜头检测器"
+            else:
+                shots["error"] = "未检测到镜头切点（可能是单镜头素材），已用固定窗口"
             return self._split_segments(duration), shots
 
         segs = self._segments_from_shots(cuts, duration)
         if segs is None:
-            # 切点太密或太少，不适合直接当片段用 → 回退
+            # 切点太密或太少，不适合直接当片段用 → 回退固定窗口
             shots["error"] = "切点分布不适合直接分段，已回退固定窗口"
-            shots["ok"] = False
-            shots["cuts"] = cuts
-            shots["source"] = source
+            shots["segmentation_mode"] = "window"
             return self._fixed_windows(duration), shots
 
-        shots["ok"] = True
-        shots["cuts"] = cuts
-        shots["source"] = source
+        shots["segmentation_mode"] = "shot"
         return segs, shots
 
     def _segments_from_shots(self, cuts, duration):
