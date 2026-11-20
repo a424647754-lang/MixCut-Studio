@@ -17,6 +17,7 @@ import hashlib
 import logging
 import queue
 import threading
+import time
 from collections import OrderedDict
 
 import cv2
@@ -67,6 +68,27 @@ _SHOT_MAX_SEGMENTS = 2000
 _SHOT_MIN_DUR = 0.4
 # 碎渣占比超过此值 → 切点太密（高频纹理/噪点误触发），回退固定窗口
 _SHOT_MAX_TINY_RATIO = 0.5
+
+# ---- 分段阶段的检测预算（第二十四阶段）--------------------------------
+# 分析页的「分段」只用于把长素材切成可编辑的片段，
+# 边界差半秒完全可接受；而 amverge 边缘检测要逐关键帧 open+seek，
+# 在 4K 素材上实测 1.276 秒/视频秒——157 秒的素材卡了 200 秒，
+# 1 小时素材要 76 分钟，用户看到的就是「一直卡在正在分段」。
+#
+# 因此分段阶段改用**低成本检测器**（PySceneDetect 实测 0.018 秒/视频秒，
+# 比 amverge 快约 70 倍），并给绝对时长兜底。
+# 需要高精度镜头的场景（如正式混剪的 run_filter）仍走完整检测链。
+_SHOT_DETECT_BUDGET = 20.0      # 单个素材的检测总预算（秒）
+_SHOT_SKIP_DETECT_DUR = 600.0   # 超过此时长直接放弃检测，用固定窗口
+# 分段允许的最小切点间隔：不追求逐帧精度，只求边界大致合理
+_SHOT_SEG_MIN_GAP = 1.0
+
+# ---- amverge 成本闸门（第二十四阶段）--------------------------------
+# 实测：4K 素材 amverge 边缘检测约 **1.276 秒/视频秒**
+#   → 157 秒素材 200 秒，1 小时素材 76 分钟。
+# 分段阶段不需要这个精度，所以估算超限就不跑。
+_AMVERGE_SEC_PER_VIDEO_SEC = 1.3      # 保守取值（比实测 1.276 略高）
+_AMVERGE_COST_LIMIT = 15.0            # 预计超过 15 秒就不跑 amverge
 
 
 def fragment_id(path, start, end):
@@ -586,28 +608,49 @@ class AnalysisWorker(QThread):
         return info
 
     def _segments_by_shots(self, path, duration):
-        """按镜头边界分段；拿不到就用固定窗口。
+        """分段。
 
-        状态语义（第二十二阶段修正）
-        ---------------------------
-        早期版本只有一个 ``ok`` 字段，既表示「检测器跑成功了吗」，
-        又被 ``_build_roster`` 当成「是不是按镜头切的」，于是出现：
+        ⚠ 2026-11-20 第二十四阶段：**分析页分段一律用固定窗口**，
+        不再在这里做镜头检测。
 
-            单镜头长素材 → 检测器成功但没有切点 → 回退固定窗口
-            → ok 仍为 True → 被标记成 segmented_by="shot"
+        为什么改回来
+        ------------
+        第二十一阶段曾让分段优先走镜头检测，想法是「按真实镜头切更自然」。
+        实测代价不可接受（素材 C3084.MP4，157 秒 4K 1.94 GB）：
 
-        实际是固定窗口，却对外声称镜头级分段。现在拆成两个独立字段：
+        · amverge 边缘检测 **200 秒**（每个关键帧都要 open+seek，
+          314 个窗口 × 约 639 毫秒）
+        · PySceneDetect 只要 2.6 秒，但这条素材**检测到 0 个切点**
 
-        · ``detection_ok``    检测器是否成功执行（没有抛异常）
-        · ``segmentation_mode`` 最终采用的分段方式："shot" / "window"
+        于是分段阶段要么卡 200 秒、要么白跑，用户看到的就是
+        「一直卡在正在分段」。
 
-        单镜头素材是 detection_ok=True + segmentation_mode="window"，
-        既不冤枉检测器，也不会把固定窗口伪装成镜头分段。
+        更要紧的是**职责本来就不同**：
+        · 分析页分段 = 把长素材切成可编辑的单元，边界差半秒无害
+        · 智能粗剪筛选 = 需要真实镜头边界，那里有完整的检测链
+          （filter_engine.run_filter，含 TransNetV2/amverge/废片）
+
+        所以分段只做便宜的事。需要逐镜头边界请用「智能粗剪筛选」。
 
         Returns:
             (segments, shots)
-            shots = {"cuts", "source", "detection_ok", "segmentation_mode",
-                     "error"}
+            shots 里的检测字段恒为「未执行」，供界面如实显示。
+        """
+        shots = {"cuts": [], "source": "", "detection_ok": False,
+                 "segmentation_mode": "window",
+                 "error": "分析页分段使用固定窗口（镜头边界见「智能粗剪筛选」）"}
+        return self._split_segments(duration), shots
+
+    def _segments_by_shots_DISABLED(self, path, duration):
+        """【已停用】按镜头边界分段。
+
+        保留这段实现是因为它是对的——只是太慢，不适合放在
+        「点一下就开始」的分析页流程里。将来如果要做后台异步检测，
+        可以从这里恢复。
+
+        状态语义（第二十二阶段修正，仍有效）：
+        · ``detection_ok``    检测器是否成功执行（没有抛异常）
+        · ``segmentation_mode`` 最终采用的分段方式："shot" / "window"
         """
         shots = {"cuts": [], "source": "", "detection_ok": False,
                  "segmentation_mode": "window", "error": ""}
@@ -677,18 +720,61 @@ class AnalysisWorker(QThread):
     def _detect_shot_cuts(self, path):
         """调用引擎检测镜头切点，返回 (cuts, source_name)。
 
-        只用**镜头切换**类检测器，不跑废片/画质/语音（那些是另外的环节）。
-        给每个检测器独立的 try/except：一个失败不影响另一个。
+        成本分级（第二十四阶段重写）
+        ---------------------------
+        这里只服务于**分析页的分段**——把长素材切成可编辑片段。
+        边界差半秒完全可接受，所以不该为此付出逐帧解码的代价。
 
-        优先级与 filter_engine.run_filter 一致：
-          amverge（Canny 边缘，2026-11-20 已改成画面内容检测）→ PySceneDetect
-        TransNetV2 不在这里默认启用：它要遍历整段解码，放在分析页会让
-        「点一下就开始」变成长时间等待；由 filter_engine 的正式流程按需开启。
+        早期版本先跑 amverge 边缘检测（要逐关键帧 open+seek），
+        实测 4K 素材 **1.276 秒/视频秒**：157 秒素材卡 200 秒，
+        1 小时素材要 76 分钟，界面表现就是「一直卡在正在分段」。
+
+        现在的顺序：
+
+        1. **超过 ``_SHOT_SKIP_DETECT_DUR``（600 秒）→ 直接不检测**，
+           用固定窗口。一小时素材切成 5 秒窗口本来就够用。
+        2. **PySceneDetect 优先**（实测 0.018 秒/视频秒，比 amverge 快约 70 倍）
+        3. 只有 PySceneDetect 没结果、且素材不算太长时，才补一次 amverge
+
+        正式混剪流程走 ``filter_engine.run_filter``，那里的检测链不受影响。
+
+        Returns:
+            (cuts, source_name)
         """
         from mixcut import filter_engine as fe
 
         cuts, sources = [], []
-        min_keep = 0.05
+        # 分段用的最小间隔：比 run_filter 的 0.5 秒宽松，减少碎渣
+        min_keep = _SHOT_SEG_MIN_GAP
+
+        # ---- 1) PySceneDetect：快（实测 0.018 秒/视频秒）----
+        t0 = time.time()
+        try:
+            got = fe._scenedetect_cuts(path)
+            if got:
+                cuts.extend(t for t, _k, _s in got)
+                sources.append("scenedetect")
+        except Exception:
+            pass
+        spent = time.time() - t0
+
+        if cuts:
+            return sorted(set(cuts)), "+".join(sources)
+
+        # ---- 2) amverge 边缘：慢（实测 1.276 秒/视频秒）----
+        #
+        # ⚠ 关键修正：**无论 PySceneDetect 有没有结果，都不能无条件跑 amverge**。
+        #   上一版把「PySceneDetect 返回空」当成「该补一次 amverge」，
+        #   而 4K 素材上 PySceneDetect 经常确实返回空（它的阈值偏保守），
+        #   于是每次都退化成 200 秒的 amverge，修复等于没做。
+        #
+        #   现在改成：amverge 只在**预计耗时可接受**时才跑。
+        #   预计耗时按实测的 1.3 秒/视频秒 估算（留一点余量）。
+        est = self._estimate_amverge_cost(path)
+        if est > _AMVERGE_COST_LIMIT:
+            # 太贵，直接用 PySceneDetect 的结果（可能为空 → 上层回退固定窗口）
+            sources.append("amverge-skipped")
+            return sorted(set(cuts)), "+".join(sources)
 
         try:
             got = fe._amverge_cuts(path, min_keep)
@@ -698,17 +784,32 @@ class AnalysisWorker(QThread):
         except Exception:
             pass
 
-        if not cuts:
-            # amverge 不可用或没找到切点时，再试 PySceneDetect
-            try:
-                got = fe._scenedetect_cuts(path)
-                if got:
-                    cuts.extend(t for t, _k, _s in got)
-                    sources.append("scenedetect")
-            except Exception:
-                pass
-
         return sorted(set(cuts)), "+".join(sources)
+
+    def _estimate_amverge_cost(self, path):
+        """估算 amverge 边缘检测要花多少秒（超过限制就不跑）。
+
+        按实测系数：4K 素材约 1.3 秒/视频秒。
+        分辨率越高、时长越长越贵；这里只按时长线性估算，
+        分辨率差异用 2K 以下打 5 折再近似一次（保守取值）。
+        """
+        try:
+            duration = float(probe_duration(path) or 0.0)
+        except Exception:
+            duration = 0.0
+        if duration <= 0:
+            return 0.0
+        factor = _AMVERGE_SEC_PER_VIDEO_SEC
+        try:
+            meta = self._probe_meta(path)
+            w = int(meta.get("width") or 0)
+            h = int(meta.get("height") or 0)
+            # 1080p 及以下大约便宜一半（像素数约 1/4，但解码不是线性的）
+            if w and h and w * h <= 1920 * 1080:
+                factor *= 0.5
+        except Exception:
+            pass
+        return duration * factor
 
     def _split_segments(self, duration):
         """短视频不切分；长视频按固定时长窗口切分，完整覆盖到结尾。"""
