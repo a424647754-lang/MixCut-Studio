@@ -472,7 +472,11 @@ class ParamsPage(QWidget):
 
         self._defaults = []
         for w in (self.resolution, self.fps, self.diversity, self.rhythm,
-                  self.version, self.beat_step):
+                  self.version, self.beat_step,
+                  # 时间覆盖 / 画面相似度（第二十三阶段补齐）：
+                  # 漏了它们会让「恢复默认」只在可见控件上生效，
+                  # 这两个下拉保持用户上次的选择，看起来像按钮失效。
+                  self.coverage, self.visual_div):
             self._defaults.append(("combo", w, w.currentIndex()))
         for w in (self.target, self.tolerance, self.count, self.clip_min, self.clip_max):
             self._defaults.append(("spin", w, w.value()))
@@ -622,6 +626,11 @@ class ParamsPage(QWidget):
         idx(self.version, "version")
         idx(self.beat_step, "beat_step")
         idx(self.bgm_mode, "bgm_mode")
+        # 时间覆盖 / 画面相似度（第二十三阶段补齐）：
+        # capture() 会存这两项，恢复时必须一并还原，否则存了工程再打开
+        # 会悄悄变回「关闭」，用户以为设置丢了。
+        idx(self.coverage, "coverage")
+        idx(self.visual_div, "visual_div")
         for widget, key, default in (
                 (self.target, "target", 30), (self.tolerance, "tolerance", 2),
                 (self.count, "count", 1), (self.clip_min, "clip_min", 2),

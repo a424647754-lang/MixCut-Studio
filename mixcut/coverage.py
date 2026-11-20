@@ -28,6 +28,8 @@
 """
 from __future__ import annotations
 
+import math
+
 
 def bucket_count(duration, target_duration, clip_hint):
     """把素材时间轴切成几个桶。
@@ -35,7 +37,7 @@ def bucket_count(duration, target_duration, clip_hint):
     取以下两者的**较大值**：
 
     · ``target_duration / clip_hint``——按成片能放几个片段
-    · ``duration / bucket_span``——按固定时间跨度
+    · ``ceil(duration / BUCKET_SPAN)``——按固定时间跨度
 
     只用前者是不够的：一条 10 分钟素材配 30 秒成片，
     前者只给 8~10 个桶，每桶 60~75 秒。「前 2 分钟画质好」
@@ -43,6 +45,20 @@ def bucket_count(duration, target_duration, clip_hint):
 
     加后者保证**无论成片多短，素材时间轴上都有足够细的桶**，
     才能识别「只用了前段」这种偏斜。
+
+    ⚠ 这里必须**向上取整**（2026-11-20 修正）
+    ----------------------------------------
+    早期用的是 ``duration // BUCKET_SPAN``（向下取整），
+    与「桶跨度上限 10 秒」的约定不符：
+
+        素材时长   向下取整   实际桶宽      向上取整
+        19 秒      1 个桶     19.0 秒  ✗   2 个桶
+        25 秒      2 个桶     12.5 秒  ✗   3 个桶
+        31 秒      3 个桶     10.3 秒  ✗   4 个��
+
+    19 秒素材干脆只有 1 个桶，等于完全没有时间分区，
+    coverage 退化成了「整段一个桶」——功能静默失效。
+    改为 ``math.ceil`` 后，每桶跨度不超过 BUCKET_SPAN。
 
     Args:
         duration: 素材时长（秒）
@@ -63,7 +79,8 @@ def bucket_count(duration, target_duration, clip_hint):
 
     by_budget = int(target_duration // clip_hint) if (
         clip_hint > 0 and target_duration > 0) else 1
-    by_span = int(duration // BUCKET_SPAN) if BUCKET_SPAN > 0 else 1
+    # 向上取整：保证每个桶的跨度不超过 BUCKET_SPAN
+    by_span = (math.ceil(duration / BUCKET_SPAN) if BUCKET_SPAN > 0 else 1)
     n = max(1, by_budget, by_span)
     return min(n, MAX_BUCKETS)
 
