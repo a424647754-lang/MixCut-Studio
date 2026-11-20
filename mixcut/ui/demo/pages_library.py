@@ -7,9 +7,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
 from . import mock, theme as T
@@ -1222,12 +1222,63 @@ class LibraryPage(QWidget):
 
     def _analyze_selected(self):
         paths = self.win.active_paths()
-        if paths and not self.win.backend.load_error:
-            self.win.go_page("analysis")
-            self.win.start_real_analysis()
+        if not paths or self.win.backend.load_error:
+            self.win.controller.log("素材库 · 没有真实素材，无法分析选中")
+            self._note("请先导入素材并选中后再分析。")
             return
-        self.win.controller.log("素材库 · 没有真实素材，无法分析选中")
-        self._note("请先导入素材并选中后再分析。")
+
+        # 一站式分析设置：分析模式 + 判废规则一次选完。
+        # 设置跨轮次保留，弹窗里带出上一次的选择。
+        page = getattr(self.win, "page_analyze", None)
+        if page is not None:
+            from mixcut.ui.demo.verdict_dialog import VerdictDialog
+            sample_count = 0
+            try:
+                sample_count = len(page._cv_ratios())
+            except Exception:
+                pass
+            dlg = VerdictDialog(
+                getattr(page, "verdict_config", None), self.win,
+                sample_count=sample_count)
+            if dlg.exec() != QDialog.Accepted:
+                self._note("已取消分析。")
+                return
+            cfg = dlg.result_config()
+            page.verdict_config = cfg
+            # 弹窗里选的分析模式同步到分析页的 mode_box，
+            # 这样 start_real_analysis（读 mode_box.currentIndex）拿到的就是这里的选择。
+            #
+            # 关键：不能走 page.set_mode()——它内部会 setCurrentIndex 并触发
+            # _on_mode_changed，而那个槽在「已有结果」时会立刻 _launch()
+            # 重跑一轮分析，等于用户还没点开始就先跑了一次。
+            # 这里直接改下拉框并断信号，只同步界面状态，不触发任何重跑。
+            try:
+                key = cfg.analysis_mode
+                mode_box = getattr(page, "mode_box", None)
+                if mode_box is not None:
+                    idx = mode_box.findData(key)
+                    if idx >= 0:
+                        mode_box.blockSignals(True)
+                        mode_box.setCurrentIndex(idx)
+                        mode_box.blockSignals(False)
+                page._mode_key = key
+                try:
+                    from mixcut.ui.analyze_page import ANALYSIS_MODES
+                    page.mode = ANALYSIS_MODES[key]
+                    desc = getattr(page, "mode_desc", None)
+                    if desc is not None:
+                        desc.setText(ANALYSIS_MODES[key]["desc"])
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            self.win.controller.log(
+                "分析设置 · 模式：%s；判废：%s；差帧占比≥%d%%；质量分<%d"
+                % (cfg.mode_text(), cfg.summary(),
+                   round(cfg.bad_ratio * 100), round(cfg.min_score)))
+
+        self.win.go_page("analysis")
+        self.win.start_real_analysis()
 
     def _clear_checked(self):
         self._reset_analysis_scope()
@@ -1297,7 +1348,7 @@ class LibraryPage(QWidget):
         if b.confirm_materials(paths):
             QMessageBox.information(self, "锁定成功", "素材已确认")
             self.win.controller.log("素材库 · 确定使用：%d 条真实素材已锁定" % len(paths))
-            self._note("已确定使用当前素材，可前往「AI 分析」。")
+            self._note("已确定使用当前素材，可前往「分析中心」。")
         else:
             QMessageBox.warning(self, "提示", "存在无效文件，请先检查素材。")
             self._note("素材确认失败，请先检查有效文件。")
@@ -1315,7 +1366,7 @@ class LibraryPage(QWidget):
         if b.confirm_materials(paths):
             QMessageBox.information(self, "锁定成功", "素材已确认")
             self.win.controller.log("素材库 · 确认混剪素材：%d 条真实素材已锁定" % len(paths))
-            self._note("混剪素材已确认，进入「参数设置」后可启动智能混剪。")
+            self._note("混剪素材已确认，进入「混剪参数」后可启动智能混剪。")
         else:
             QMessageBox.warning(self, "提示", "存在无效文件，请先检查素材。")
             self._note("素材确认失败，请先检查有效文件。")

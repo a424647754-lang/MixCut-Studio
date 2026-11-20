@@ -3,10 +3,9 @@
   "accent": "紫色",
   "motion": {
     "page": true,
-    "button": true,
+    "button": false,
     "number": true,
     "reduce_follow": true
   },
-  "draft_dir": "C:\\Users\\Administrator\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft",
-  "clean_days": 14
+  "draft_dir": "C:\\Users\\Administrator\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft"
 }

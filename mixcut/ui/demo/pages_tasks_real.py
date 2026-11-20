@@ -178,7 +178,7 @@ class TasksPage(QWidget):
         note_row.setSpacing(6)
         self.stage_dot = Dot(T.TEXT_3, 6)
         note_row.addWidget(self.stage_dot)
-        self.stage_note = QLabel("等待开始：先在「AI 分析」页完成素材分析")
+        self.stage_note = QLabel("等待开始：先在「分析中心」完成素材分析")
         self.stage_note.setFont(T.font(11))
         self.stage_note.setStyleSheet("color:%s;" % T.TEXT_3)
         note_row.addWidget(self.stage_note, 1)
@@ -225,7 +225,7 @@ class TasksPage(QWidget):
         self.queue_count.setStyleSheet("color:%s;" % T.TEXT_3)
         th.addWidget(self.queue_count)
         self.tasks_card.lay.addLayout(th)
-        self.empty_hint = QLabel("暂无任务 · 在「参数设置」点「开始智能混剪」后，这里会出现任务")
+        self.empty_hint = QLabel("暂无任务 · 在「混剪参数」点「开始智能混剪」后，这里会出现任务")
         self.empty_hint.setFont(T.font(11))
         self.empty_hint.setStyleSheet("color:%s;" % T.TEXT_3)
         self.empty_hint.setWordWrap(True)
@@ -376,7 +376,7 @@ class TasksPage(QWidget):
             self.stage_note.setText("任务已中止：%s" % status)
             self._set_chips(pct, "error")
         elif not self.analysis_ready():
-            self.stage_note.setText("等待开始：先在「AI 分析」页完成素材分析")
+            self.stage_note.setText("等待开始：先在「分析中心」完成素材分析")
             self._set_chips(0, None)
         else:
             self.stage_note.setText("分析完成，可开始混剪")
@@ -387,7 +387,7 @@ class TasksPage(QWidget):
 
         ready = self.analysis_ready()
         self.btn_run.setEnabled(ready)
-        self.btn_run.setToolTip("请先在「AI 分析」页完成素材分析" if not ready else "开始混剪")
+        self.btn_run.setToolTip("请先在「分析中心」完成素材分析" if not ready else "开始混剪")
 
         if status == "运行中":
             if not self._rows:

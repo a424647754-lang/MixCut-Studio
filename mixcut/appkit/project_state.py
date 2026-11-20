@@ -519,7 +519,7 @@ class ProjectStateMixin:
         if worker is not None and worker.isRunning():
             ok = QMessageBox.question(
                 self, "分析还在进行",
-                "AI 分析尚未完成，现在保存的是已完成的部分结果。\n"
+                "分析尚未完成，现在保存的是已完成的部分结果。\n"
                 "建议等分析结束后再保存。仍要保存吗？")
             if ok != QMessageBox.StandardButton.Yes:
                 self.log("工程保存已取消：等待分析完成")

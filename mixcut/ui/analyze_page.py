@@ -199,12 +199,18 @@ class AnalysisWorker(QThread):
     error = Signal(str)
 
     def __init__(self, paths: list, mode_key: str = "medium",
-                 cache: AnalysisCache = None, initial_items: list = None):
+                 cache: AnalysisCache = None, initial_items: list = None,
+                 verdict_config=None):
         super().__init__()
         self.paths = list(paths)
         self._mode_key = mode_key
         self.mode = ANALYSIS_MODES[mode_key]
         self.cache = cache or AnalysisCache()
+        # 判废规则：用户可在「分析设置」弹窗里自定义哪些因素才算废
+        from mixcut.verdict_config import VerdictConfig
+        self.verdict_config = (verdict_config
+                               if isinstance(verdict_config, VerdictConfig)
+                               else VerdictConfig())
         self._stop = False
         self._paused = False
         self._gate = threading.Event()
@@ -462,13 +468,11 @@ class AnalysisWorker(QThread):
             frame = frames[best][1]
             if frame is None:
                 continue
-            q, gray = self.detector._eval_frame(frame, prev_gray)
+            q, gray = self.detector._eval_frame(frame, prev_gray,
+                                                verdict=self.verdict_config)
             prev_gray = gray
             cache_key = self._frame_cache_key(entry, fidx)
-            self.cache.cv_cache[cache_key] = {
-                "is_bad": q.is_bad, "reason": q.reason,
-                "sharpness": q.sharpness, "brightness": q.brightness,
-                "penalty": self.detector._bad_score(q)}
+            self.cache.cv_cache[cache_key] = self._pack_frame_result(q, fidx)
         with self.cache.lock:
             item = self._assemble(entry, cv_frames)
             self._items[key] = item
@@ -566,11 +570,82 @@ class AnalysisWorker(QThread):
     def _all_complete(self):
         return all(self._segment_complete(e) for e in self._roster)
 
-    @staticmethod
-    def _frame_cache_key(entry, frame_index):
-        """帧缓存键必须绑定素材路径，不能只用绝对帧号。"""
+    def _verdict_signature(self):
+        """当前判废规则的指纹，用于区分「同一帧在不同规则下的结论」。
+
+        改了判废规则后，旧缓存里的 is_bad 就不再可信，必须换一个命名空间，
+        否则用户调整了规则却看到旧结果。
+        """
+        vcfg = getattr(self, "verdict_config", None)
+        if vcfg is None:
+            return "default"
+        parts = []
+        for key in sorted(vcfg.enabled):
+            if vcfg.is_on(key):
+                parts.append("%s=%.1f" % (key, vcfg.threshold(key)))
+        return "|".join(parts) or "none"
+
+    def _frame_cache_key(self, entry, frame_index):
+        """帧缓存键 = (规范化路径, 绝对帧号)。
+
+        **不含判废规则**：缓存里存的是「这一帧算出来的客观数值」
+        （清晰度、亮度、对比度……），这些与规则无关。
+        「是否算废」在每次聚合时按当前规则现算——这是毫秒级操作，
+        不需要重新解码视频。
+
+        早期版本把规则指纹放进了键里，导致用户改一档阈值就要重跑整轮分析，
+        属于设计缺陷，已移除。见台账第十七阶段。
+        """
         path_key = os.path.normcase(os.path.abspath(str(entry["path"])))
         return path_key, int(frame_index)
+
+    def _pack_frame_result(self, q, frame_no):
+        """把一帧的评估结果打包成缓存条目。
+
+        **只存客观实测值**，不存「是否算废」的结论——
+        结论依赖判废规则，规则一变就过期；实测值与规则无关，可以长期复用。
+        判定在 ``_assemble`` / ``_judge_frame`` 里按当前规则现算。
+
+        Args:
+            q: ``ShotQuality``，_eval_frame 的返回
+            frame_no: 绝对帧号（明细里要显示用）
+        """
+        return {
+            "frame_no": int(frame_no),
+            "quality_score": q.quality_score,
+            "measured": {
+                "sharpness": q.sharpness,
+                "brightness": q.brightness,
+                "contrast": q.contrast,
+                "noise": q.noise,
+                "motion": q.motion,
+                "edge_density": q.edge_density,
+                "dark_ratio": q.dark_ratio,
+                "saturation": q.saturation,
+                "color_cast": q.color_cast,
+            },
+        }
+
+    def _judge_frame(self, packed):
+        """按**当前**判废规则判定一帧，返回 (is_bad, reason, hits)。
+
+        与 `verdict_advice.frame_hits` 口径一致：只看已启用的维度。
+        """
+        from mixcut.verdict_advice import frame_hits
+        cfg = getattr(self, "verdict_config", None)
+        if cfg is None:
+            from mixcut.verdict_config import VerdictConfig as _VC
+            cfg = _VC()
+        hit, keys = frame_hits(packed, cfg)
+        if not hit:
+            return False, "", []
+        labels = []
+        try:
+            from mixcut.verdict_config import DIMENSIONS
+            labels = [DIMENSIONS[k]["label"] for k in keys if k in DIMENSIONS]
+        except Exception:
+            labels = list(keys)
+        return True, "、".join(labels), keys
 
     def _segment_complete(self, entry):
         cv_frames = self._required_frames(entry)
@@ -637,11 +712,10 @@ class AnalysisWorker(QThread):
                 continue
             # _eval_frame 返回 (ShotQuality, gray) 二元组；gray 已按内部缩放比例
             # 处理过，回传它作为下一帧的 prev_gray，保证运动强度口径一致。
-            q, gray = self.detector._eval_frame(frame, prev_gray)
-            self.cache.cv_cache[cache_key] = {
-                "is_bad": q.is_bad, "reason": q.reason,
-                "sharpness": q.sharpness, "brightness": q.brightness,
-                "penalty": self.detector._bad_score(q)}
+            # verdict 传当前判废规则：用户勾掉的维度不会让这一帧变「差」。
+            q, gray = self.detector._eval_frame(frame, prev_gray,
+                                                verdict=self.verdict_config)
+            self.cache.cv_cache[cache_key] = self._pack_frame_result(q, fidx)
             prev_gray = gray
 
         # 与 UI 手动选择共用同一把锁，避免重算覆盖刚刚做出的人工决定。
@@ -708,33 +782,109 @@ class AnalysisWorker(QThread):
         return max(0, min(100, 100 - worst_penalty * 3))
 
     def _assemble(self, entry, cv_frames):
-        cv_res = [self.cache.cv_cache[self._frame_cache_key(entry, f)]
-                  for f in cv_frames
-                  if self._frame_cache_key(entry, f) in self.cache.cv_cache]
-        n_cv = len(cv_res)
+        raw = [self.cache.cv_cache[self._frame_cache_key(entry, f)]
+               for f in cv_frames
+               if self._frame_cache_key(entry, f) in self.cache.cv_cache]
+        n_cv = len(raw)
+
+        # ---- 逐帧判定：按**当前规则现算** ----
+        # 缓存里只有实测值，这里是「实测 vs 阈值」的比较，毫秒级。
+        # 因此用户可以随时改判废规则，不需要重新解码视频。
+        cv_res = []
+        for packed in raw:
+            is_bad, reason, keys = self._judge_frame(packed)
+            cv_res.append({**packed, "is_bad": is_bad, "reason": reason,
+                           "hit_keys": keys})
+
         bad_cv = sum(1 for q in cv_res if q["is_bad"])
         ratio = bad_cv / n_cv if n_cv else 0.0
+        score = self._cv_quality(cv_res)
+
+        # ---- 片段级判定（判定规则见 mixcut/verdict_config.py）----
+        # 旧逻辑是「任意一帧出问题就整段判废」，导致纯色背景、浅景深等
+        # 正常画面被大量误伤；且三档模式的 bad_ratio 被这条规则架空了。
+        # 现在只有两种条件会判废：
+        #   1. 差帧占比达到 bad_ratio
+        #   2. 整体质量分低于 min_score
+        vcfg = self.verdict_config
+        ratio_limit = vcfg.bad_ratio if vcfg is not None \
+            else self.mode["bad_ratio"]
+        score_limit = vcfg.min_score if vcfg is not None else 25.0
 
         reasons = []
-        if ratio >= self.mode["bad_ratio"]:
-            reasons.append("画质差帧过多")
+        if n_cv and ratio >= ratio_limit:
+            reasons.append("画质差帧过多(%d/%d)" % (bad_cv, n_cv))
+        if score < score_limit:
+            reasons.append("整体质量分过低(%.0f)" % score)
+
+        # 差帧的具体原因只作为说明信息列出，不单独构成判废依据
+        detail = []
         if bad_cv > 0:
-            rset = []
             for q in cv_res:
-                if q["is_bad"]:
-                    for part in q["reason"].replace("，", "、").split("、"):
-                        part = part.strip()
-                        if part and part not in rset:
-                            rset.append(part)
-            reasons.append("、".join(rset))
+                if not q["is_bad"]:
+                    continue
+                for part in q["reason"].replace("，", "、").split("、"):
+                    part = part.strip()
+                    if part and part not in detail:
+                        detail.append(part)
 
         uniq = [r for r in reasons if r]
         is_bad = len(uniq) > 0
-        score = self._cv_quality(cv_res)
+        # 未判废但有个别差帧时，把明细放进 bad_reason 供界面提示
+        detail_text = "、".join(detail)
 
         old = self._items.get(entry["key"], {})
         manual = old.get("manual_included", False)
         included = old.get("included") if manual else (not is_bad)
+
+        # ---- C：标注这份结果的可信度 ----
+        # 「测过、结果是 0」和「压根没测」必须能区分开，
+        # 否则用户会把「没有数据」读成「检测到没有问题」。
+        try:
+            from mixcut.verdict_integrity import of_item
+            integrity = of_item(
+                {"frames_detail": frames_detail,
+                 "is_bad": is_bad, "score": score},
+                expected_frames=len(cv_frames),
+                current_signature=self._verdict_signature())
+            integrity_d = integrity.to_dict()
+        except Exception:
+            integrity_d = None
+
+        # ---- 明细：每一帧的实测值 / 阈值 / 判定（A：判废明细弹窗的数据源）----
+        # 用户想知道「为什么这段被废」，光有 is_bad 解释不了，
+        # 必须把每一帧算出来的数值和当时用的阈值一起带出去。
+        frames_detail = []
+        # 当前规则下各启用维度的阈值；明细里显示的「阈值」用的是它
+        cur_limits = {}
+        if vcfg is not None:
+            for k in vcfg.enabled:
+                if vcfg.is_on(k):
+                    cur_limits[k] = vcfg.threshold(k)
+        for f in cv_frames:
+            key_f = self._frame_cache_key(entry, f)
+            packed = self.cache.cv_cache.get(key_f)
+            if packed is None:
+                continue
+            # 判定按当前规则现算（缓存里只有实测值）
+            is_bad_f, reason_f, keys_f = self._judge_frame(packed)
+            # 采样帧时间点 = 帧号 / 帧率
+            fps = float(entry.get("fps") or 0) or 0.0
+            t = (float(f) / fps) if fps else 0.0
+            measured = dict(packed.get("measured") or {})
+            frames_detail.append({
+                "frame_no": int(f),
+                "time": round(t, 3),
+                "is_bad": bool(is_bad_f),
+                "reason": reason_f,
+                "hit_keys": keys_f,
+                "measured": measured,
+                # 只保留这一帧实际命中的维度阈值，明细更干净
+                "limits": {k: cur_limits[k] for k in keys_f
+                           if k in cur_limits},
+                "all_limits": dict(cur_limits),
+                "quality_score": packed.get("quality_score"),
+            })
 
         return {
             "frag_id": fragment_id(entry["path"], entry["seg_start"], entry["seg_end"]),
@@ -749,11 +899,33 @@ class AnalysisWorker(QThread):
             "min_score": score,
             "is_bad": is_bad,
             "bad_reason": "；".join(uniq),
+            "minor_issues": detail_text,
             "preview_time": (entry["seg_start"] + entry["seg_end"]) / 2.0,
             "bad_frame_ratio": ratio,
             "included": included,
             "manual_included": manual,
             "analyzed_mode": self._mode_key,
+            # ---- 判废明细（A：弹窗数据源）----
+            "frames_detail": frames_detail,
+            # ---- C：可信度标注 ----
+            "integrity": integrity_d,
+            "analyzed_signature": self._verdict_signature(),
+            "verdict_limits": {
+                "bad_ratio": ratio_limit,
+                "min_score": score_limit,
+                "bad_frames": bad_cv,
+                "total_frames": n_cv,
+                "measured_score": score,
+                # 判定用的条件文字，弹窗直接显示
+                "conditions": [
+                    {"label": "差帧占比", "op": ">=",
+                     "limit": ratio_limit, "actual": ratio,
+                     "hit": bool(n_cv and ratio >= ratio_limit)},
+                    {"label": "整体质量分", "op": "<",
+                     "limit": score_limit, "actual": score,
+                     "hit": bool(score < score_limit)},
+                ],
+            },
         }
 
     def _snapshot(self):
@@ -1390,6 +1562,9 @@ class AnalyzePage(QWidget):
         self._results = []
         self._cache = AnalysisCache()
         self._mode_key = "medium"
+        # 判废规则：用户在「分析设置」弹窗里自定义；跨轮次保留
+        from mixcut.verdict_config import VerdictConfig
+        self.verdict_config = VerdictConfig()
         self._finished = False
 
         # 已分析素材的混剪池：结果缓存保留全部批次，池子只决定谁参与混剪。
@@ -1422,7 +1597,7 @@ class AnalyzePage(QWidget):
 
         # ---- 顶部 ----
         head = QHBoxLayout()
-        title = QLabel("素材分析")
+        title = QLabel("分析中心")
         title.setObjectName("Hero")
         head.addWidget(title)
         head.addStretch(1)
@@ -2246,7 +2421,8 @@ class AnalyzePage(QWidget):
 
         self._worker = AnalysisWorker(
             paths, self._mode_key, self._cache,
-            initial_items=self._results)
+            initial_items=self._results,
+            verdict_config=self.verdict_config)
         self._worker.progress.connect(self._on_progress)
         self._worker.item_updated.connect(self._on_item_updated)
         self._worker.finished_all.connect(self._on_finished_all)
@@ -2432,7 +2608,7 @@ class AnalyzePage(QWidget):
         self._refresh_stats()
         self._update_pool_btn()
         self.progress_label.setText(
-            f"分析完成，共 {len(results)} 个片段，可到「参数设置」开始混剪")
+            f"分析完成，共 {len(results)} 个片段，可到「混剪参数」开始混剪")
         self.analysisFinished.emit(len(self._results))
 
     def _on_worker_stopped(self):
@@ -3426,6 +3602,11 @@ class AnalyzePage(QWidget):
                   if item.get("included", True)
                   else menu.addAction("✓  加入这个片段"))
 
+        # 「为什么」入口：把这一段的判废算术摊开给用户看。
+        # 放在最前面，因为它是最常被问的问题（「这段明明挺好，凭什么废了」）。
+        why_act = menu.addAction("🔍  为什么这样判定")
+        menu.addSeparator()
+
         # 废片被手动勾回时，把当前状态说清楚，避免用户困惑
         # 「明明标了废，怎么还进混剪了」。
         if item.get("is_bad") and item.get("manual_included") \
@@ -3460,6 +3641,9 @@ class AnalyzePage(QWidget):
         new_folder_act = folder_menu.addAction("新建文件夹并加入…")
 
         chosen = self._exec_menu(menu, pos)
+        if chosen == why_act:
+            self._show_verdict_detail(row)
+            return
         if chosen in folder_actions:
             fid = folder_actions[chosen]
             self._move_frags_to_folder(list(set(frags)), fid)
@@ -3498,6 +3682,88 @@ class AnalyzePage(QWidget):
         rs = getattr(self.win, "refresh_selectors", None)
         if callable(rs):
             rs()
+
+    def _show_verdict_detail(self, row):
+        """弹出这段片段的判废明细（右键「为什么这样判定」）。"""
+        if not (0 <= row < len(self._results)):
+            return
+        from mixcut.ui.demo.verdict_detail import VerdictDetailDialog
+        from mixcut.verdict_advice import suggest
+
+        cfg = getattr(self, "verdict_config", None)
+        # 建议基于**整批结果**算：单看一段无法判断「改了会影响多少」，
+        # 而用户真正想知道的是「这么改值不值」。
+        advices, summary = ([], "")
+        if cfg is not None:
+            try:
+                advices, summary = suggest(self._results, cfg)
+            except Exception:
+                advices, summary = [], ""
+
+        dlg = VerdictDetailDialog(self._results[row], cfg, self,
+                                  advices=advices)
+        if summary:
+            dlg.setWindowTitle("判废明细 · " + summary)
+        if dlg.exec() == QDialog.Accepted:
+            new_cfg = dlg.applied_config()
+            if new_cfg is not None:
+                self.verdict_config = new_cfg
+                # 规则只影响「实测 vs 阈值」的比较，实测值已经在缓存里，
+                # 因此这里**不需要重新解码视频**，只重新聚合一遍即可（毫秒级）。
+                # 这正是判废规则与缓存解耦后带来的好处。
+                self.win.controller.log(
+                    "分析中心 · 已应用判废建议，正在按新规则重新判定（无需重新分析）")
+                self._reapply_verdict()
+
+    def _reapply_verdict(self):
+        """按当前判废规则重新聚合已有结果，**不重新解码视频**。
+
+        判废规则只参与「实测 vs 阈值」的比较，而实测值早就在 cv_cache 里，
+        所以改规则是纯计算的事。相比整轮重跑（要重新调 ffmpeg 解码），
+        这里快几个数量级。
+
+        只处理已经分析过的片段；没分析过的片段仍然是空的，需要正常启动分析。
+        """
+        entries = [e for e in self._roster
+                   if e["key"] in self._items]
+        if not entries:
+            return 0
+        changed = 0
+        for entry in entries:
+            cv_frames = self._required_frames(entry)
+            try:
+                item = self._assemble(entry, cv_frames)
+            except Exception:
+                continue
+            before = self._items.get(entry["key"]) or {}
+            if bool(before.get("is_bad")) != bool(item.get("is_bad")):
+                changed += 1
+            self._items[entry["key"]] = item
+        # 刷新界面：卡片、统计、混剪池、门控
+        self._results = [self._items[e["key"]] for e in self._roster
+                         if e["key"] in self._items]
+        # 逐行刷新已有卡片（不重建，避免丢选中态和滚动位置）
+        for row in range(len(self._results)):
+            try:
+                self._refresh_list_row(row)
+            except Exception:
+                pass
+        for fn_name in ("_refresh_stats", "_refresh_pool_ui"):
+            fn = getattr(self, fn_name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+        rs = getattr(self.win, "refresh_selectors", None)
+        if callable(rs):
+            try:
+                rs()
+            except Exception:
+                pass
+        self.win.controller.log(
+            "分析中心 · 重新判定完成：%d 段结论有变化（未重新解码素材）" % changed)
+        return changed
 
     def _refresh_list_row(self, row):
         card = self.cards.get(row)

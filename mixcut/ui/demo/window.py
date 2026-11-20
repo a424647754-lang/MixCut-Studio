@@ -99,9 +99,7 @@ class TopBar(QWidget):
         self.gpu.setStyleSheet("color:%s;" % T.TEXT_3)
         lay.addWidget(self.gpu)
         lay.addSpacing(6)
-        self.search = IconButton("search", 32, tooltip="搜索")
         self.settings = IconButton("sliders", 32, tooltip="设置")
-        lay.addWidget(self.search)
         lay.addWidget(self.settings)
 
         # 工程操作必须有可见中文入口，不能只靠 Ctrl 快捷键
@@ -133,7 +131,6 @@ class TopBar(QWidget):
         self.btn_save.clicked.connect(lambda: win._shortcut_save())
         self.btn_save_as.clicked.connect(lambda: win.save_project_as())
         self.settings.clicked.connect(lambda: win.go_page("settings"))
-        self.search.clicked.connect(lambda: win.go_page("library"))
         self.btn_min.clicked.connect(win.showMinimized)
         self.btn_max.clicked.connect(self._toggle_max)
         self.btn_close.clicked.connect(win.close)
@@ -211,8 +208,8 @@ class Sidebar(QWidget):
         self._group(lay, "工作区")
         for key, label, icon in (("library", "素材库", "library"),
                                   ("work", "素材预览", "home"),
-                                  ("analysis", "AI 分析", "spark"),
-                                  ("params", "参数设置", "sliders"),
+                                  ("analysis", "分析中心", "spark"),
+                                  ("params", "混剪参数", "sliders"),
                                   ("tasks", "任务中心", "flow")):
             item = NavItem(key, label, icon)
             item.clicked.connect(lambda _=False, k=key: win.go_page(k))
@@ -698,7 +695,7 @@ class MainWindow(QMainWindow):
     def start_real_analysis(self):
         paths = self.active_paths()
         if not paths:
-            self.controller.log("AI 分析 · 后台素材库没有真实视频，请先导入素材")
+            self.controller.log("分析中心 · 后台素材库没有真实视频，请先导入素材")
             return False
         mode = self.analysis.mode.currentIndex()
         if not self.backend.ready and not self.backend.load_error:
@@ -712,7 +709,7 @@ class MainWindow(QMainWindow):
             self.controller.active_stage = 1
             self.controller.stateChanged.emit()
         else:
-            self.controller.log("AI 分析 · 后台未能启动分析任务")
+            self.controller.log("分析中心 · 后台未能启动分析任务")
         return ok
 
     def start_real_mix(self, paths=None):
@@ -725,7 +722,7 @@ class MainWindow(QMainWindow):
         paths = list(paths or [])
         if not paths:
             self.controller.log(
-                "开始混剪 · 混剪池为空，请先在 AI 分析页的「混剪池」加入素材")
+                "开始混剪 · 混剪池为空，请先在分析中心的「混剪池」加入素材")
             return False
         if not self.backend.ready and not self.backend.load_error:
             self.controller.status_text = "加载后台"

@@ -910,7 +910,7 @@ class BackendBridge(QObject):
         self.set_confirmed_paths(paths)
         page_analyze = getattr(old, "page_analyze", None)
         if page_analyze is not None and not getattr(page_analyze, "_results", None):
-            self.win.controller.log("开始混剪 · 缺少分析结果，请先在 AI 分析页完成分析")
+            self.win.controller.log("开始混剪 · 缺少分析结果，请先到分析中心完成分析")
             return False
         try:
             old.refresh_selectors()

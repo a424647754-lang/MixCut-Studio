@@ -23,7 +23,11 @@ class ShotQuality:
     brightness: float = 0.0      # 平均亮度 0-255
     contrast: float = 0.0        # 灰度标准差
     noise: float = 0.0           # 中值滤波残差估计
-    motion: float = 0.0          # 相邻采样帧的画面变化，仅作信息，不判手抖
+    motion: float = 0.0          # 相邻采样帧的画面变化，用于手抖判定
+    edge_density: float = 0.0    # 边缘像素占比(%)，判断空镜
+    dark_ratio: float = 0.0      # 暗部占比(%)，判断阴影过重
+    saturation: float = 0.0      # 平均饱和度，判断灰片
+    color_cast: float = 0.0      # 通道均值差，判断色偏
     quality_score: float = 70.0  # 0-100，越高越好
     bad_frame_ratio: float = 0.0 # 窗口内明显异常帧比例
     sample_count: int = 0
@@ -128,8 +132,15 @@ class BadShotDetector:
         self.shots = results
         return results
 
-    def _eval_frame(self, frame: np.ndarray, prev_gray: Optional[np.ndarray]):
-        """评估单帧；先缩小到最长边 960，控制高分辨率素材的计算成本。"""
+    def _eval_frame(self, frame: np.ndarray, prev_gray: Optional[np.ndarray],
+                    verdict=None):
+        """评估单帧；先缩小到最长边 960，控制高分辨率素材的计算成本。
+
+        Args:
+            verdict: 可选的判废规则（``mixcut.verdict_config.VerdictConfig``）。
+                传入时按用户配置决定「哪些维度参与判废」以及各自的阈值；
+                不传则沿用内置默认阈值，行为与改造前一致。
+        """
         h, w = frame.shape[:2]
         scale = min(1.0, self.MAX_FRAME_SIDE / float(max(h, w)))
         if scale < 1.0:
@@ -139,23 +150,53 @@ class BadShotDetector:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         q = ShotQuality(start_sec=0.0, end_sec=0.0)
 
+        # 阈值来源：有配置用配置，没有用内置默认
+        def _th(key, fallback):
+            if verdict is None:
+                return fallback
+            return verdict.threshold(key)
+
+        def _on(key):
+            return verdict is None or verdict.is_on(key)
+
+        blur_th = _th("blur", self.BLUR_THRESHOLD)
+        black_th = _th("dark", self.BLACK_THRESHOLD)
+        white_th = _th("bright", self.WHITE_THRESHOLD)
+        low_th = _th("underexposed", self.BRIGHTNESS_LOW)
+        high_th = _th("overexposed", self.BRIGHTNESS_HIGH)
+        noise_th = _th("noise", self.NOISE_THRESHOLD)
+
         laplacian = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         q.sharpness = laplacian
-        q.is_blurry = laplacian < self.BLUR_THRESHOLD
+        q.is_blurry = laplacian < blur_th
 
         q.brightness = float(np.mean(gray))
         q.contrast = float(gray.std())
         dark_ratio = float(np.mean(gray < 12))
         bright_ratio = float(np.mean(gray > 245))
-        q.is_black = q.brightness < self.BLACK_THRESHOLD or dark_ratio > 0.98
-        q.is_white = q.brightness > self.WHITE_THRESHOLD or bright_ratio > 0.98
-        q.is_underexposed = (q.brightness < self.BRIGHTNESS_LOW and dark_ratio > 0.65
+        q.is_black = q.brightness < black_th or dark_ratio > 0.98
+        q.is_white = q.brightness > white_th or bright_ratio > 0.98
+        q.is_underexposed = (q.brightness < low_th and dark_ratio > 0.65
                              and not q.is_black)
-        q.is_overexposed = (q.brightness > self.BRIGHTNESS_HIGH and bright_ratio > 0.65
+        q.is_overexposed = (q.brightness > high_th and bright_ratio > 0.65
                             and not q.is_white)
 
         denoised = cv2.medianBlur(gray, 3)
         q.noise = float(cv2.absdiff(gray, denoised).mean())
+
+        # ---- 第十五阶段补充指标 ----
+        # 边缘密度：Canny 边缘占比，用来判断「空镜」（纯色墙/大天空/失焦背景）
+        edges = cv2.Canny(gray, 80, 160)
+        q.edge_density = float((edges > 0).mean()) * 100.0
+        # 暗部占比：亮度 < 40 的像素比例，判断「阴影过重」
+        q.dark_ratio = dark_ratio * 100.0
+        # 饱和度与色偏
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        q.saturation = float(hsv[:, :, 1].mean())
+        b_m = float(frame[:, :, 0].mean())
+        g_m = float(frame[:, :, 1].mean())
+        r_m = float(frame[:, :, 2].mean())
+        q.color_cast = float(max(b_m, g_m, r_m) - min(b_m, g_m, r_m))
 
         if prev_gray is not None:
             if prev_gray.shape != gray.shape:
@@ -167,18 +208,39 @@ class BadShotDetector:
         # 逐帧评分只用于窗口聚合；运动强度不参与质量扣分。
         q.quality_score = self._frame_quality_score(q)
         reasons = []
-        if q.is_black:
+        # 每个维度都要「启用 + 命中」才算这一帧有问题
+        if q.is_black and _on("dark"):
             reasons.append("黑场")
-        if q.is_white:
+        if q.is_white and _on("bright"):
             reasons.append("白场")
-        if q.is_blurry:
+        if q.is_blurry and _on("blur"):
             reasons.append("疑似模糊")
-        if q.is_overexposed:
+        if q.is_overexposed and _on("overexposed"):
             reasons.append("过曝")
-        if q.is_underexposed:
+        if q.is_underexposed and _on("underexposed"):
             reasons.append("欠曝")
-        if q.noise > self.NOISE_THRESHOLD:
+        if q.noise > noise_th and _on("noise"):
             reasons.append("噪点偏高")
+        # 手抖：依赖相邻帧差异，只在启用且提供了 prev_gray 时才判定
+        if _on("shake") and prev_gray is not None \
+                and q.motion > _th("shake", 45.0):
+            q.is_shaky = True
+            reasons.append("手抖")
+        # 画面发灰：对比度低于下限
+        if _on("flat") and q.contrast < _th("flat", 24.0):
+            reasons.append("画面发灰")
+        # 空镜：边缘密度低于下限
+        if _on("empty") and q.edge_density < _th("empty", 1.5):
+            reasons.append("空镜")
+        # 灰片：饱和度低于下限
+        if _on("gray") and q.saturation < _th("gray", 28.0):
+            reasons.append("灰片")
+        # 色偏：通道均值差超过上限
+        if _on("cast") and q.color_cast > _th("cast", 24.0):
+            reasons.append("色偏")
+        # 阴影过重：暗部占比超过上限
+        if _on("shadow") and q.dark_ratio > _th("shadow", 65.0):
+            reasons.append("阴影过重")
         q.reason = "、".join(reasons)
         q.is_bad = bool(reasons)
         return q, gray

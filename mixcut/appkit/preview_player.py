@@ -357,7 +357,7 @@ class PreviewPlayerMixin:
                     if key in (Qt.Key_Escape, Qt.Key_P):
                         self._exit_preview_fullscreen()
                         return True
-                # 2) 没全屏：P 在当前预览页进入全屏（素材预览 / AI 分析）
+                # 2) 没全屏：P 在当前预览页进入全屏（素材预览 / 分析中心）
                 if key == Qt.Key_P and not self._typing_focus():
                     target = self._current_preview_target()
                     if target is not None:

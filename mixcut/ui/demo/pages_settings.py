@@ -230,20 +230,13 @@ class SettingsPage(QWidget):
         root.setSpacing(6)
         h = QLabel("设置")
         h.setFont(T.font(30, QFont.Weight.DemiBold))
-        s = QLabel("外观、动效与运行环境")
-        s.setFont(T.font(12))
-        s.setStyleSheet("color:%s;" % T.TEXT_3)
         head = QHBoxLayout()
         head.addWidget(h)
         head.addStretch(1)
-        self.btn_new = SoftButton("新建工程", "ghost", height=32, min_width=86)
-        self.btn_open = SoftButton("打开工程", "ghost", height=32, min_width=86)
-        self.btn_save = SoftButton("保存工程", "ghost", height=32, min_width=86)
+        # 新建/打开/保存工程已由顶栏提供，这里不再重复放一份
         self.btn_recheck = SoftButton("重新检测", "secondary", height=32, min_width=86)
-        for b in (self.btn_new, self.btn_open, self.btn_save, self.btn_recheck):
-            head.addWidget(b)
+        head.addWidget(self.btn_recheck)
         root.addLayout(head)
-        root.addWidget(s)
         root.addSpacing(12)
 
         cols = QHBoxLayout()
@@ -361,14 +354,6 @@ class SettingsPage(QWidget):
         self.row_policy.mousePressEvent = self._cycle_policy
         for row in (self.row_drafts, self.row_cache, self.row_policy):
             store.lay.addWidget(row)
-        eng = QHBoxLayout()
-        eng.setSpacing(6)
-        self.btn_engine_refresh = SoftButton("刷新状态", "ghost", height=28, radius=7)
-        self.btn_engine_cache = SoftButton("打开缓存目录", "ghost", height=28, radius=7)
-        for b in (self.btn_engine_refresh, self.btn_engine_cache):
-            eng.addWidget(b)
-        eng.addStretch(1)
-        store.lay.addLayout(eng)
 
         docs = QHBoxLayout()
         docs.setSpacing(6)
@@ -380,19 +365,35 @@ class SettingsPage(QWidget):
         docs.addWidget(self.btn_operation_guide)
         docs.addStretch(1)
         store.lay.addLayout(docs)
-
-        eng2 = QHBoxLayout()
-        eng2.setSpacing(6)
-        self.btn_engine_reload = SoftButton("重新加载模型", "ghost", height=28, radius=7)
-        eng2.addWidget(self.btn_engine_reload)
-        eng2.addStretch(1)
-        store.lay.addLayout(eng2)
         right.addWidget(store)
+
+        # ---------------- MIX 引擎 ----------------
+        # 引擎操作原本埋在「缓存与草稿」卡片里、被文档按钮隔开，
+        # 从混剪参数页跳过来根本找不到。这里独立成一张卡片。
+        engine = Card(padding=20, spacing=8)
+        et = QLabel("MIX 引擎")
+        et.setFont(T.font(14, QFont.Weight.DemiBold))
+        engine.lay.addWidget(et)
+        self.row_engine_state = InfoRow("引擎状态", "检测中…")
+        self.row_engine_cache = InfoRow("模型缓存", "—", tooltip="点击打开缓存目录")
+        self.row_engine_cache.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.row_engine_cache.mousePressEvent = lambda *_: self._engine_cache()
+        engine.lay.addWidget(self.row_engine_state)
+        engine.lay.addWidget(self.row_engine_cache)
+
+        eng = QHBoxLayout()
+        eng.setSpacing(6)
+        self.btn_engine_refresh = SoftButton("刷新状态", "ghost", height=28, radius=7)
+        self.btn_engine_reload = SoftButton("重新加载模型", "ghost", height=28, radius=7)
+        self.btn_engine_cache = SoftButton("打开缓存目录", "ghost", height=28, radius=7)
+        for b in (self.btn_engine_refresh, self.btn_engine_reload,
+                  self.btn_engine_cache):
+            eng.addWidget(b)
+        eng.addStretch(1)
+        engine.lay.addLayout(eng)
+        right.addWidget(engine)
         right.addStretch(1)
 
-        self.btn_new.clicked.connect(self.win.new_project)
-        self.btn_open.clicked.connect(self._open_project)
-        self.btn_save.clicked.connect(self._save_project)
         self.btn_recheck.clicked.connect(self._recheck)
         self.btn_engine_refresh.clicked.connect(self._engine_refresh)
         self.btn_engine_cache.clicked.connect(self._engine_cache)
@@ -458,6 +459,29 @@ class SettingsPage(QWidget):
                                               self._short_path(str(cache))))
         self.row_policy.set_value("保留最近 %d 天（上限 14 天）" % self._clean_days)
 
+        # ---- MIX 引擎 ----
+        # 只做显示，不主动触发后台刷新（避免和 _engine_refresh 互相调用）。
+        # 注意：旧引擎页（page_engine）已在解耦时移除，引擎状态改为看后台桥
+        # 是否可用 + 参数页里的组件勾选情况。
+        try:
+            b = self.win.backend
+            if b is None or (b.load_error and not b.ready):
+                self.row_engine_state.set_value("后台不可用")
+            else:
+                params = getattr(self.win, "demo_params", None)
+                boxes = getattr(params, "comp_boxes", None) or {}
+                on = sum(1 for cb in boxes.values() if cb.isChecked())
+                self.row_engine_state.set_value(
+                    "就绪 · %d 个组件启用" % on if boxes else "就绪")
+        except Exception:
+            self.row_engine_state.set_value("读取失败")
+        try:
+            self.row_engine_cache.set_value(
+                "%s · %s" % (_human_size(_dir_size(cache)),
+                             self._short_path(str(cache))))
+        except Exception:
+            self.row_engine_cache.set_value("—")
+
     def _short_path(self, path):
         if not path:
             return ""
@@ -516,43 +540,8 @@ class SettingsPage(QWidget):
         return removed
 
     # -----------------------------------------------------
-    # 工程 / 引擎
+    # 引擎
     # -----------------------------------------------------
-    def _open_project(self):
-        b = self.win.backend
-        if b.load_error and not b.ready:
-            self.win.controller.log("设置 · 后台桥不可用，打开工程未执行：" +
-                                    b.load_error.splitlines()[-1])
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "打开工程", getattr(self.win, "_project_path", "") or "",
-            "MixCut 工程 (*.mixcut)")
-        if not path:
-            return
-        if b.open_project_from(path):
-            self.win.controller.log("设置 · 已打开工程：%s" % path)
-        else:
-            self.win.controller.log("设置 · 打开工程失败：%s" % path)
-
-    def _save_project(self):
-        b = self.win.backend
-        if b.load_error and not b.ready:
-            self.win.controller.log("设置 · 后台桥不可用，保存工程未执行：" +
-                                    b.load_error.splitlines()[-1])
-            return
-        # 与顶部「保存工程」按钮一致：已经保存过的工程直接覆盖原文件，
-        # 不再每次弹对话框（否则用户会误以为在新建工程）。
-        current = getattr(self.win, "_project_path", "") or ""
-        if not current:
-            # 还没有工程文件：走一次另存为让用户选路径
-            if self.win.save_project_as():
-                self.win.controller.log("设置 · 工程已保存")
-            return
-        if b.save_project_to(current):
-            self.win.controller.log("设置 · 工程已更新：%s" % current)
-        else:
-            self.win.controller.log("设置 · 工程保存失败：%s" % current)
-
     def _engine_refresh(self):
         self._purge_cache()
         self.refresh_env()

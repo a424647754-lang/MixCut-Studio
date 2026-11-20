@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""参数设置：对齐正式源码「智能混剪」页参数，去掉素材选择，转场黑名单为下滑面板。"""
+"""混剪参数设置：对齐正式源码「智能混剪」页参数，去掉素材选择，转场黑名单为下滑面板。"""
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtGui import QFont
@@ -240,19 +240,11 @@ class ParamsPage(QWidget):
         head = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(4)
-        h = QLabel("参数设置")
+        h = QLabel("混剪参数设置")
         h.setFont(T.font(30, QFont.Weight.DemiBold))
-        s = QLabel("对齐正式「智能混剪」参数 · 不含素材选择 · 真实后台")
-        s.setFont(T.font(12))
-        s.setStyleSheet("color:%s;" % T.TEXT_3)
         titles.addWidget(h)
-        titles.addWidget(s)
         head.addLayout(titles, 1)
-        self.btn_engine = SoftButton("查看「MIX引擎」页", "ghost", height=34, min_width=148)
-        self.btn_cancel = SoftButton("取消", "ghost", height=34, min_width=74)
         self.btn_run = SoftButton("开始智能混剪", "primary", "play", min_width=124)
-        head.addWidget(self.btn_engine)
-        head.addWidget(self.btn_cancel)
         head.addWidget(self.btn_run)
         root.addLayout(head)
 
@@ -309,8 +301,7 @@ class ParamsPage(QWidget):
         self.btn_fast = SoftButton("快速批量", "secondary", height=30, radius=8)
         self.btn_fine = SoftButton("精细质检", "secondary", height=30, radius=8)
         self.btn_selfcheck = SoftButton("强制自检", "ghost", height=30, radius=8)
-        self.btn_engine_state = SoftButton("查看引擎状态", "ghost", height=30, radius=8)
-        for b in (self.btn_fast, self.btn_fine, self.btn_selfcheck, self.btn_engine_state):
+        for b in (self.btn_fast, self.btn_fine, self.btn_selfcheck):
             eh.addWidget(b)
         eng.lay.addLayout(eh)
         hw = QHBoxLayout()
@@ -353,6 +344,14 @@ class ParamsPage(QWidget):
             self.comp_boxes[key] = cb
             comps.addWidget(cb, i // 3, i % 3)
         eng.lay.addLayout(comps)
+        # 引擎状态与缓存的详细操作在「设置」页，这里留一个低调的文字入口
+        eng_link = QLabel(
+            '<a href="#" style="color:#71757F;text-decoration:none;">'
+            '引擎状态与缓存 →</a>')
+        eng_link.setFont(T.font(10))
+        eng_link.setCursor(Qt.PointingHandCursor)
+        eng_link.linkActivated.connect(lambda *_: self._goto_engine())
+        eng.lay.addWidget(eng_link)
         root.addWidget(eng)
 
         mid = QHBoxLayout()
@@ -475,13 +474,10 @@ class ParamsPage(QWidget):
 
         self.btn_run.clicked.connect(self._start)
         self.btn_run.setEnabled(False)
-        self.btn_run.setToolTip("请先在「AI 分析」页完成素材分析")
-        self.btn_cancel.clicked.connect(self._cancel)
-        self.btn_engine.clicked.connect(self._open_engine)
+        self.btn_run.setToolTip("请先在「分析中心」完成素材分析")
         self.btn_fast.clicked.connect(lambda: self._preset("快速批量"))
         self.btn_fine.clicked.connect(lambda: self._preset("精细质检"))
         self.btn_selfcheck.clicked.connect(self._self_check)
-        self.btn_engine_state.clicked.connect(self._open_engine)
         self.btn_bgm.clicked.connect(lambda: self._choose(self.bgm, "音频文件"))
         self.btn_music_dir.clicked.connect(lambda: self._choose(self.music_dir, "音乐文件夹"))
         self.btn_loc.clicked.connect(lambda: self._choose(self.draft_dir, "草稿目录"))
@@ -508,15 +504,15 @@ class ParamsPage(QWidget):
 
     def _start(self):
         if not self.analysis_ready():
-            self.win.controller.log("参数设置 · 尚未完成素材分析，不能开始混剪")
+            self.win.controller.log("混剪参数 · 尚未完成素材分析，不能开始混剪")
             self.refresh_run_state()
             return
         paths = self.win.active_paths()
         if not paths:
-            self.win.controller.log("参数设置 · 素材库为空，无法开始混剪")
-            self.win.controller.log("参数设置 · 请先在素材库导入视频")
+            self.win.controller.log("混剪参数 · 素材库为空，无法开始混剪")
+            self.win.controller.log("混剪参数 · 请先在素材库导入视频")
             return
-        self.win.controller.log("参数设置 · 同步参数并调用后台智能混剪")
+        self.win.controller.log("混剪参数 · 同步参数并调用后台智能混剪")
         self.win.start_real_mix()
 
     def analysis_ready(self):
@@ -532,7 +528,7 @@ class ParamsPage(QWidget):
         self.btn_run.setEnabled(ready)
         self.btn_run.setToolTip(
             "开始混剪并生成剪映草稿" if ready
-            else "请先在「AI 分析」页完成素材分析")
+            else "请先在「分析中心」完成素材分析")
 
     def on_shown(self):
         self.refresh_run_state()
@@ -644,16 +640,9 @@ class ParamsPage(QWidget):
         self.refresh_run_state()
         return True
 
-    def _cancel(self):
-        b = self.win.backend
-        if b.ready:
-            b.cancel_mix()
-            self.win.controller.log("参数设置 · 已向后台混剪任务发送取消")
-            return
-        self.win.controller.log("参数设置 · 后台混剪任务未运行，无需取消")
-
-    def _open_engine(self):
-        self.win.controller.log("参数设置 · 跳转「MIX引擎」状态与缓存（设置页）")
+    def _goto_engine(self):
+        """引擎区的文字链接：跳到设置页的引擎状态与缓存操作。"""
+        self.win.controller.log("混剪参数 · 跳转「设置」页查看引擎状态与缓存")
         self.win.go_page("settings")
 
     _RES_CANVAS = {
@@ -694,25 +683,25 @@ class ParamsPage(QWidget):
                     cb.setChecked(True)
             self.hw_gpu.setChecked(True)
             self.engine_status.setText("已应用「精细质检」预设")
-        self.win.controller.log("参数设置 · 筛选引擎预设：%s" % name)
+        self.win.controller.log("混剪参数 · 筛选引擎预设：%s" % name)
 
     def _self_check(self):
         b = self.win.backend
         if b.load_error and not b.ready:
             self.engine_status.setText("后台桥不可用 · 无法自检")
-            self.win.controller.log("参数设置 · 强制自检未执行：" +
+            self.win.controller.log("混剪参数 · 强制自检未执行：" +
                                     b.load_error.splitlines()[-1])
             return
         ok = b.force_self_check(show_dialog=False)
         self.engine_status.setText(
             "强制自检完成 · 组件可用" if ok else "强制自检未通过 · 请检查 ffmpeg")
-        self.win.controller.log("参数设置 · 强制自检：%s" %
+        self.win.controller.log("混剪参数 · 强制自检：%s" %
                                 ("后台组件就绪" if ok else "后台返回失败"))
 
     def _choose(self, field, what):
         b = self.win.backend
         if b.load_error and not b.ready:
-            self.win.controller.log("参数设置 · 选择%s未执行：%s" % (
+            self.win.controller.log("混剪参数 · 选择%s未执行：%s" % (
                 what, b.load_error.splitlines()[-1]))
             return
         value = ""
@@ -734,9 +723,9 @@ class ParamsPage(QWidget):
                 b.set_music_folder(value)
             elif what == "草稿目录":
                 b.set_draft_dir(value)
-            self.win.controller.log("参数设置 · 选择%s：%s" % (what, value))
+            self.win.controller.log("混剪参数 · 选择%s：%s" % (what, value))
             return
-        self.win.controller.log("参数设置 · 未选择%s" % what)
+        self.win.controller.log("混剪参数 · 未选择%s" % what)
 
     def _reset_defaults(self):
         for kind, w, val in self._defaults:
@@ -760,7 +749,7 @@ class ParamsPage(QWidget):
         self.bgm.setText(self._default_bgm)
         self.music_dir.setText(self._default_music_dir)
         self.hw_cpu.setChecked(True)
-        self.win.controller.log("参数设置 · 已恢复默认参数")
+        self.win.controller.log("混剪参数 · 已恢复默认参数")
 
     def _sync_status(self):
         pass

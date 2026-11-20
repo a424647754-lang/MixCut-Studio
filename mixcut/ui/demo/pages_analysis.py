@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 分析：镜头质量 / 画面分析 / OpenCLIP / 语义覆盖 / 相似检测 / 混剪参数。"""
+"""分析中心：镜头质量 / 画面分析 / OpenCLIP / 语义覆盖 / 相似检测 / 混剪参数。"""
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
@@ -251,7 +251,7 @@ class AnalysisPage(QWidget):
         head = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(4)
-        h = QLabel("AI 分析")
+        h = QLabel("分析中心")
         h.setFont(T.font(30, QFont.Weight.DemiBold))
         self.sub = QLabel("尚未分析 · 导入素材后可开始分析")
         self.sub.setFont(T.font(12))
@@ -441,7 +441,7 @@ class AnalysisPage(QWidget):
     def _start(self):
         if not self.win.active_paths():
             self.real_mode = False
-            self.win.controller.log("AI 分析 · 素材库为空，请先导入素材")
+            self.win.controller.log("分析中心 · 素材库为空，请先导入素材")
             return
         self.real_mode = True
         self._real_summary = {}
@@ -456,7 +456,7 @@ class AnalysisPage(QWidget):
         paths = self.mix_pool_paths()
         if not paths:
             self.win.controller.log(
-                "AI 分析 · 混剪池为空，请先在「混剪池」里加入已分析素材")
+                "分析中心 · 混剪池为空，请先在「混剪池」里加入已分析素材")
             return
         self.win.start_real_mix(paths)
 
@@ -464,11 +464,11 @@ class AnalysisPage(QWidget):
         b = self.win.backend
         if self.real_mode and b.ready:
             b.stop_analysis()
-            self.win.controller.log("AI 分析 · 已向后台分析任务发送停止")
+            self.win.controller.log("分析中心 · 已向后台分析任务发送停止")
             self.btn_start.setEnabled(True)
             self._real_timer.stop()
             return
-        self.win.controller.log("AI 分析 · 当前没有正在运行的后台分析")
+        self.win.controller.log("分析中心 · 当前没有正在运行的后台分析")
 
     def _poll_real(self):
         if not self.real_mode:
