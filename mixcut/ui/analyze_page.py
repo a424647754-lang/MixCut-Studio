@@ -69,6 +69,17 @@ _SHOT_MIN_DUR = 0.4
 # 碎渣占比超过此值 → 切点太密（高频纹理/噪点误触发），回退固定窗口
 _SHOT_MAX_TINY_RATIO = 0.5
 
+# 片段卡片网格的固定列数（第二十七阶段）。
+# 不再跟随窗口宽度——宽度会因右侧预览区状态变化而变，
+# 导致点选片段时整片卡片重排，看起来像 UI 乱跳。
+_CARD_COLS = 3
+
+# 右侧预览栏固定宽度（第二十七阶段）。
+# 右栏跟着窗口伸缩时，左边网格的可用宽度也跟着变，
+# 卡片列数和预览画面尺寸都会动。钉死成固定值。
+# 全屏预览走独立控件，不受此影响。
+_PREVIEW_WIDTH = 380
+
 # ---- 分段阶段的检测预算（第二十四阶段）--------------------------------
 # 分析页的「分段」只用于把长素材切成可编辑的片段，
 # 边界差半秒完全可接受；而 amverge 边缘检测要逐关键帧 open+seek，
@@ -2208,9 +2219,28 @@ class AnalyzePage(QWidget):
         pl.addWidget(self.preview_info)
 
         body_split.addWidget(preview_card)
-        body_split.setSizes([560, 380])
-        body_split.setStretchFactor(0, 3)
-        body_split.setStretchFactor(1, 2)
+        # ---- 右侧预览区固定宽度（第二十七阶段）----
+        # 原来 setSizes([560, 380]) + setStretchFactor(1, 2) 时右栏会随窗口伸缩：
+        # 窗口一变宽，右栏变宽、左边网格可用宽度变小，卡片列数跟着跳
+        # （列数已改固定三列），预览画面尺寸也在动。
+        #
+        # 现在把右栏钉死：
+        # · setStretchFactor(1, 0)  右栏不参与伸缩
+        # · setFixedWidth(...)      宽度恒定
+        # · 右栏不可折叠，拖动分隔条也拖不动它
+        # 全屏预览是另一套（独立全屏控件），不受这里影响。
+        body_split.setStretchFactor(0, 1)
+        body_split.setStretchFactor(1, 0)
+        body_split.setCollapsible(1, False)
+        preview_card.setFixedWidth(_PREVIEW_WIDTH)
+        preview_card.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # 记下固定宽度：全屏进出会 setParent 换层级，退出后需要重新钉一次
+        # （见 preview_stage._exit_preview_fullscreen）
+        try:
+            preview_card._dsh_fixed_width = _PREVIEW_WIDTH
+        except Exception:
+            pass
+        body_split.setSizes([800, _PREVIEW_WIDTH])
         root.addWidget(body_split, 1)
 
         # 应用级事件过滤器：全屏时可靠捕获 Esc（QVideoWidget 全屏后自身
@@ -3184,22 +3214,30 @@ class AnalyzePage(QWidget):
         return plan
 
     def _relayout_cards(self):
+        """排布片段卡片网格：**固定三列**。
+
+        ⚠ 2026-11-20 第二十七阶段：列数不再跟随窗口宽度。
+
+        为什么改
+        --------
+        原来按 ``viewport().width()`` 算列数：
+
+            cols = (view_w + gap) // (card_w + gap)
+
+        问题在于**这个宽度会变**——点选不同片段时右侧预览区状态变化
+        （有没有内容、播放器高度等）会挤压中间网格的可用宽度，
+        于是列数在 2/3 之间跳。用户点不同的片段，整片卡片就重排一次，
+        看起来就是「UI 乱跳」。
+
+        现在固定三列：视口够宽就三列排开，不够宽则由 QScrollArea
+        横向滚动兜底（卡片本身有最小宽度，不会被压扁）。
+        网格位置从此与窗口/预览区宽度**完全无关**，点击不会再触发重排。
+        """
         if not getattr(self, "folder_tiles", None):
             self._sync_folder_tiles()
-        view_w = self.grid_scroll.viewport().width()
-        if view_w <= 60:
-            # 页面还没显示过，先按整页宽度估个列数
-            view_w = max(self.width() - 420, 400)
-        gap = 12
-        card_w = 236
-        cols = max(1, int((view_w + gap) // (card_w + gap)))
+        cols = _CARD_COLS
 
-        # 列数没变时跳过重排。
-        # QGridLayout.addWidget 只是把控件挪到新的 (row, col)，
-        # 不清掉旧位置留下的占位；窗口拖动时 resizeEvent 会疯狂触发，
-        # 每次都重排容易让布局里积下过期的行列占位，
-        # 表现就是「一行有时 2 个有时 3 个」「顺序从左到右乱跳」。
-        # 只有列数真的变了才重排，能大幅减少这种抖动。
+        # 列数固定后，只有卡片数量变化才需要重排
         if getattr(self, "_cols", None) == cols and \
                 getattr(self, "_laid_out_count", None) == len(self.cards):
             return

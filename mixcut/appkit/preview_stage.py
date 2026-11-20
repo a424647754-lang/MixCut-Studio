@@ -153,6 +153,16 @@ class PreviewStageMixin:
             if card is not None and card.lay.indexOf(target) < 0:
                 card.lay.insertWidget(0, target, 1)
         target.show()
+        # 退出全屏后重新确认固定宽度（第二十七阶段）：
+        # 分析页的预览栏被 setFixedWidth 钉死，全屏进出会 setParent 换层级，
+        # 部分平台上 setParent 后尺寸约束会被重置，导致退出全屏后右栏又变成
+        # 可伸缩。这里把固定宽度再钉一次，保证「全屏不受影响、退出后仍固定」。
+        fixed_w = getattr(target, "_dsh_fixed_width", None)
+        if fixed_w:
+            try:
+                target.setFixedWidth(int(fixed_w))
+            except Exception:
+                pass
         self._set_fs_button_state(False)
         self._fs_home = (None, None, -1)
         return True
