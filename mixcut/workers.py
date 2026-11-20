@@ -19,6 +19,7 @@ import traceback
 from PySide6.QtCore import QThread, Signal
 
 from . import analysis as analysis_core
+from . import analysis_schema
 from . import mixbuilder as mb
 from . import musicstudio as ms
 from . import transitions as tr
@@ -472,11 +473,15 @@ class MixBuildWorker(BaseWorker):
                 continue
             seen.add(path)
             duration = float(frag.get("source_duration") or 0.0)
-            stubs.append({
-                "source": {"id": len(seen), "path": path, "duration": duration},
-                "junk": [],
-                "_quality_segments": [],
-            })
+            stubs.append(analysis_schema.make_item(
+                analysis_schema.make_source(len(seen), path, duration),
+                junk=[],
+                junk_merged=[],
+                # 本路径不做画质窗口与镜头检测：明确 None（没跑过），
+                # 而不是 []（跑了但结果为空）。
+                _quality_segments=None,
+                _scenes=None,
+            ))
             self._emit_source(
                 path, "cached",
                 {"valid_segments": sum(

@@ -150,3 +150,6 @@ tests/_*.py
 tests/_*.json
 tests/_*.txt
 tests/_*.md
+
+# ---------- 本地生成的报告 ----------
+成片自检报告.md

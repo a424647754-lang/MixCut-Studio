@@ -25,6 +25,7 @@ import threading
 
 from . import ffmpeg_tools as ft
 from . import analysis as analysis_core
+from . import analysis_schema
 from . import timeline as tl
 
 
@@ -101,18 +102,65 @@ def _transnet_available():
 
 @lru_cache(maxsize=1)
 def self_check():
-    """返回各组件可用性 + CUDA 可用性。结果缓存，UI 启动时调用一次。"""
+    """返回各组件可用性 + CUDA 可用性。结果缓存，UI 启动时调用一次。
+
+    ``cuda`` 一项的含义
+    ------------------
+    指「**推理框架**能不能用 GPU」，也就是 ``torch.cuda.is_available()``。
+    这是 UI 给用户看的「有没有 GPU 加速推理」的依据。
+
+    ⚠ 历史 BUG（2026-11-20 修正）
+    旧实现写的是 ``avail["cuda"] = bool(ft.find_ffmpeg())``——
+    **有 ffmpeg 就报 CUDA 可用**。ffmpeg 是否存在与 GPU 毫无关系，
+    结果是：装了 CPU 版 torch 的机器上 UI 显示「CUDA 可用」，
+    而 TransNetV2 / OpenCLIP 实际全在 CPU 上跑，用户以为有加速。
+
+    注意区分两个概念，不要再混：
+    · **torch CUDA**（本字段）：神经网络推理是否用 GPU
+    · **OpenCV CUDA / NVDEC**：视频解码与图像处理是否用 GPU
+      这两条互相独立：本项目可以「OpenCV 走 CUDA 硬解 + torch 走 CPU」。
+      引擎侧的 CUDA 状态由 ``gpu_engine.describe()`` 单独报告。
+    """
     avail = {
         "amverge": _can_import("amverge"),
         "scenedetect": _can_import("scenedetect"),
         "videoscope": _can_import("videoscope"),
         "transnetv2": _transnet_available(),
         "ffmpeg": bool(ft.find_ffmpeg()),
-        "cuda": False,
+        # 真实探测，不再是「有 ffmpeg 就算有」
+        "cuda": _torch_cuda_available(),
+        # 单独报告 torch 是否为 CPU-only 构建，便于 UI 说清「为什么没有加速」
+        "torch_cpu_only": _torch_is_cpu_only(),
     }
-    # CUDA：能找到 ffmpeg 即具备探测条件；具体到某素材由 resolve_gpu_mode 判定
-    avail["cuda"] = bool(ft.find_ffmpeg())
     return avail
+
+
+def _torch_cuda_available():
+    """torch 是否真的能用 CUDA。torch 未安装或 CPU-only 构建都返回 False。"""
+    try:
+        import torch
+    except Exception:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _torch_is_cpu_only():
+    """torch 是否是 CPU-only 构建（用来给用户一句明确的解释）。
+
+    ``torch.version.cuda is None`` 表示这个 wheel 根本没编进 CUDA 支持，
+    换机器/换驱动都救不了，只能重装对应版本的 torch。
+    """
+    try:
+        import torch
+    except Exception:
+        return False
+    try:
+        return getattr(torch.version, "cuda", None) is None
+    except Exception:
+        return False
 
 
 def missing_modules(config):
@@ -143,10 +191,17 @@ def force_self_check():
         "videoscope": "VideoScope 画质缺陷检测",
         "transnetv2": "TransNetV2 高阶镜头切变",
         "ffmpeg": "FFmpeg 可执行程序",
-        "cuda": "CUDA 硬件加速",
+        "cuda": "CUDA 硬件加速（神经网络推理）",
     }
     for key, label in label_map.items():
         report.append(f"[{'OK' if avail.get(key) else '缺失'}] {label}")
+    # 给一句明确的解释，而不是让用户对着「缺失」自己猜：
+    # CPU-only 的 torch 换驱动也救不了，只能重装对应 CUDA 版本的 wheel。
+    if not avail.get("cuda") and avail.get("torch_cpu_only"):
+        report.append("      当前 PyTorch 为 CPU-only 构建，"
+                      "TransNetV2 / OpenCLIP 走 CPU 推理（结果相同，速度较慢）")
+    elif not avail.get("cuda"):
+        report.append("      未检测到可用的 CUDA（PyTorch 未安装或不可用）")
     return avail, report
 
 
@@ -846,10 +901,14 @@ def to_mix_analysis(paths, filter_result):
         cuts = sorted({float(c["time"]) for c in src["shot_cuts"]
                        if 0.0 < float(c["time"]) < duration})
         scenes = [(t, None) for t in cuts] or None
-        analysis.append({
-            "source": tl.make_source(idx, path, duration),
-            "junk": [tl.make_junk(idx, s, e, sorted(t)) for s, e, t in junk],
-            "_junk_merged": junk,
-            "_scenes": scenes,
-        })
+        analysis.append(analysis_schema.make_item(
+            tl.make_source(idx, path, duration),
+            junk=[tl.make_junk(idx, s, e, sorted(t)) for s, e, t in junk],
+            junk_merged=junk,
+            # 本路径跑了镜头检测：即使没找到切点，也是「测过且为空」，
+            # 与 analysis.analyze_source 的 None（没测过）语义不同。
+            _scenes=scenes,
+            _quality_segments=None,     # 本路径不跑画质窗口
+            shot_cuts=[float(c["time"]) for c in src["shot_cuts"]],
+        ))
     return analysis

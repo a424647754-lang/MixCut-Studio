@@ -11,6 +11,7 @@ MixCut · 素材分析核心
 
 from pathlib import Path
 
+from . import analysis_schema
 from . import ffmpeg_tools as ft
 from . import timeline as tl
 
@@ -190,6 +191,9 @@ def analyze_source(source_id, path, options, progress_cb=None, cancel_check=None
         "_junk_merged": junk,   # 内部使用，重建时方便
         "_quality_segments": quality_segments,
         "_silent_track": whole_silent,   # 空音轨标记（界面/其他模块可用）
+        # 契约字段：本路径不跑镜头检测，明确标记为「没测过」而不是「没找到」
+        "_scenes": None,
+        "_analysis_schema": analysis_schema.ANALYSIS_SCHEMA,
     }
 
 

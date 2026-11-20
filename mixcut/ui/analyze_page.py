@@ -53,10 +53,20 @@ logger = logging.getLogger("mixcut.scene")
 
 # 长视频分段门槛：时长超过该值才做多重画面分析，否则只分析一遍
 SEGMENT_THRESHOLD = 5.0
-# 长视频固定窗口分段长度（秒）
+# 长视频固定窗口分段长度（秒）——镜头检测不可用时的回退方案
 FALLBACK_WINDOW = 5.0
 # 每个子片段的标准 OpenCV 采样网格大小
 GRID_SIZE = 12
+
+# ---- 镜头级分段门槛（第二十一阶段）------------------------------------
+# 按镜头边界分段时，段数必须在 [MIN, MAX] 之间，否则认为检测结果不可信、
+# 回退到固定窗口。上限按「一小时内每 2 秒一个镜头」估算，超了基本是误检。
+_SHOT_MIN_SEGMENTS = 1
+_SHOT_MAX_SEGMENTS = 2000
+# 单段最短时长：短于此视为碎渣
+_SHOT_MIN_DUR = 0.4
+# 碎渣占比超过此值 → 切点太密（高频纹理/噪点误触发），回退固定窗口
+_SHOT_MAX_TINY_RATIO = 0.5
 
 
 def fragment_id(path, start, end):
@@ -186,6 +196,9 @@ class AnalysisCache:
         self.scene_cache = {}    # normalized_path -> (duration, segments, fps, total)
         # 帧缓存必须同时包含素材路径和帧号，避免多视频同帧号互相污染。
         self.cv_cache = {}       # (normalized_path, abs_frame) -> OpenCV 结果 dict
+        # 镜头检测结果：normalized_path -> {"cuts", "source", "ok", "error"}
+        # 与 scene_cache 分开存：分段结果要复用，但镜头明细也要留给混剪与诊断。
+        self.shot_cache = {}
 
 
 # =========================================================
@@ -488,12 +501,20 @@ class AnalysisWorker(QThread):
                 0, 0, f"正在分段（{os.path.basename(path)}）…")
             duration, segments, fps, total = self._get_scene_info(path)
             name = os.path.basename(path)
+            shot_info = self.cache.shot_cache.get(path) or {}
             for si, (s, e) in enumerate(segments):
                 key = (path, si)
                 entry = {
                     "key": key, "path": path, "name": name,
                     "seg_index": si, "seg_start": s, "seg_end": e,
                     "duration": duration, "fps": fps, "total_frames": total,
+                    # 镜头级分段信息（第二十一阶段），供诊断与混剪使用。
+                    # segmented_by="window" 表示回退到了固定窗口，
+                    # 后续模块据此知道这次不是按镜头切的。
+                    "segmented_by": ("shot" if shot_info.get("ok")
+                                     else "window"),
+                    "shot_source": shot_info.get("source") or "",
+                    "shot_fallback": shot_info.get("error") or "",
                 }
                 self._roster.append(entry)
                 self._roster_map[key] = entry
@@ -524,7 +545,22 @@ class AnalysisWorker(QThread):
             return meta
 
     def _get_scene_info(self, path):
-        """带缓存的分段信息（时长/分段/帧率/总帧数，重复分析不重复探测）。"""
+        """带缓存的分段信息（时长/分段/帧率/总帧数，重复分析不重复探测）。
+
+        分段策略（2026-11-20 第二十一阶段改造）
+        --------------------------------------
+        优先用**镜头边界**分段，而不是固定 5 秒窗口：
+
+        · 检测成功且切点合理 → 按真实镜头边界切（``_segments_from_shots``）
+        · 检测失败 / 太密 / 太少   → 回退固定窗口（``_fixed_windows``），
+          行为与改造前完全一致，不会被新功能拖垮
+
+        改造前：分析页从头到尾只做固定窗口切分，镜头检测（filter_engine 里
+        TransNetV2 / amverge / PySceneDetect）的结果**从来没进入过这条链路**，
+        混剪拿到的永远是 5 秒窗口。详见台账第二十一阶段。
+
+        失败时**不缓存空结果**，下次仍会重试——避免「一次失败永久降级」。
+        """
         if path in self.cache.scene_cache:
             return self.cache.scene_cache[path]
 
@@ -537,11 +573,114 @@ class AnalysisWorker(QThread):
         if not duration:
             duration = meta["duration"] or (total / fps if fps else 0.0)
 
-        segments = self._split_segments(duration)
+        segments, shots = self._segments_by_shots(path, duration)
 
         info = (duration, segments, fps, total)
         self.cache.scene_cache[path] = info
+        # 镜头信息单独存：它比 segments 信息量大，且要供混剪使用
+        self.cache.shot_cache[path] = shots
         return info
+
+    def _segments_by_shots(self, path, duration):
+        """按镜头边界分段；拿不到就用固定窗口。
+
+        Returns:
+            (segments, shots)
+            shots = {"cuts": [...], "source": "amverge|scenedetect|...",
+                     "ok": bool, "error": str}
+            失败时 shots["ok"]=False 且 cuts=[]，调用方据此回退。
+        """
+        shots = {"cuts": [], "source": "", "ok": False, "error": ""}
+        if duration <= 0:
+            return self._split_segments(duration), shots
+
+        try:
+            cuts, source = self._detect_shot_cuts(path)
+        except Exception as exc:      # noqa: BLE001 - 记录后回退，不中断分析
+            shots["error"] = "%s: %s" % (type(exc).__name__, exc)
+            return self._split_segments(duration), shots
+
+        if not cuts:
+            # 没检测到切点：可能是单镜头长片，也可能是检测器没跑成。
+            # 单镜头长片也应该能切，所以回退固定窗口。
+            shots["ok"] = bool(source)
+            shots["source"] = source
+            return self._split_segments(duration), shots
+
+        segs = self._segments_from_shots(cuts, duration)
+        if segs is None:
+            # 切点太密或太少，不适合直接当片段用 → 回退
+            shots["error"] = "切点分布不适合直接分段，已回退固定窗口"
+            shots["ok"] = False
+            shots["cuts"] = cuts
+            shots["source"] = source
+            return self._fixed_windows(duration), shots
+
+        shots["ok"] = True
+        shots["cuts"] = cuts
+        shots["source"] = source
+        return segs, shots
+
+    def _segments_from_shots(self, cuts, duration):
+        """切点 → 连续片段区间；不合理时返回 None 让调用方回退。
+
+        合理性门槛（宁可用固定窗口，也不给用户一堆碎渣）：
+
+        · 段数不少于 ``_SHOT_MIN_SEGMENTS`` 且不多于 ``_SHOT_MAX_SEGMENTS``
+        · 短于 ``_SHOT_MIN_DUR`` 的片段占比不超过 ``_SHOT_MAX_TINY_RATIO``
+
+        切点太密通常意味着检测器在高频纹理/噪点上误触发
+        （第二十阶段实测过这种素材），这种情况固定窗口反而更稳。
+        """
+        pts = sorted({round(float(c), 3) for c in cuts
+                      if 0.0 < float(c) < duration})
+        if not pts:
+            return None
+        bounds = [0.0] + pts + [float(duration)]
+        segs = [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)]
+        segs = [(s, e) for s, e in segs if e - s > 1e-3]
+        if not (_SHOT_MIN_SEGMENTS <= len(segs) <= _SHOT_MAX_SEGMENTS):
+            return None
+        tiny = sum(1 for s, e in segs if (e - s) < _SHOT_MIN_DUR)
+        if tiny / len(segs) > _SHOT_MAX_TINY_RATIO:
+            return None
+        return segs
+
+    def _detect_shot_cuts(self, path):
+        """调用引擎检测镜头切点，返回 (cuts, source_name)。
+
+        只用**镜头切换**类检测器，不跑废片/画质/语音（那些是另外的环节）。
+        给每个检测器独立的 try/except：一个失败不影响另一个。
+
+        优先级与 filter_engine.run_filter 一致：
+          amverge（Canny 边缘，2026-11-20 已改成画面内容检测）→ PySceneDetect
+        TransNetV2 不在这里默认启用：它要遍历整段解码，放在分析页会让
+        「点一下就开始」变成长时间等待；由 filter_engine 的正式流程按需开启。
+        """
+        from mixcut import filter_engine as fe
+
+        cuts, sources = [], []
+        min_keep = 0.05
+
+        try:
+            got = fe._amverge_cuts(path, min_keep)
+            if got:
+                cuts.extend(t for t, _k, _s in got)
+                sources.append("amverge")
+        except Exception:
+            pass
+
+        if not cuts:
+            # amverge 不可用或没找到切点时，再试 PySceneDetect
+            try:
+                got = fe._scenedetect_cuts(path)
+                if got:
+                    cuts.extend(t for t, _k, _s in got)
+                    sources.append("scenedetect")
+            except Exception:
+                pass
+
+        return sorted(set(cuts)), "+".join(sources)
 
     def _split_segments(self, duration):
         """短视频不切分；长视频按固定时长窗口切分，完整覆盖到结尾。"""
@@ -837,23 +976,14 @@ class AnalysisWorker(QThread):
         manual = old.get("manual_included", False)
         included = old.get("included") if manual else (not is_bad)
 
-        # ---- C：标注这份结果的可信度 ----
-        # 「测过、结果是 0」和「压根没测」必须能区分开，
-        # 否则用户会把「没有数据」读成「检测到没有问题」。
-        try:
-            from mixcut.verdict_integrity import of_item
-            integrity = of_item(
-                {"frames_detail": frames_detail,
-                 "is_bad": is_bad, "score": score},
-                expected_frames=len(cv_frames),
-                current_signature=self._verdict_signature())
-            integrity_d = integrity.to_dict()
-        except Exception:
-            integrity_d = None
-
         # ---- 明细：每一帧的实测值 / 阈值 / 判定（A：判废明细弹窗的数据源）----
         # 用户想知道「为什么这段被废」，光有 is_bad 解释不了，
         # 必须把每一帧算出来的数值和当时用的阈值一起带出去。
+        #
+        # 注意顺序：frames_detail 必须在「C：可信度标注」之前算好，
+        # 因为 of_item 要看它判断「数据是否完整」。
+        # 早期版本先调 of_item 再定义 frames_detail，触发 NameError 又被
+        # except 吞掉，导致 integrity 恒为 None、C 功能整体失效。见台账第二十一阶段。
         frames_detail = []
         # 当前规则下各启用维度的阈值；明细里显示的「阈值」用的是它
         cur_limits = {}
@@ -868,13 +998,18 @@ class AnalysisWorker(QThread):
                 continue
             # 判定按当前规则现算（缓存里只有实测值）
             is_bad_f, reason_f, keys_f = self._judge_frame(packed)
-            # 采样帧时间点 = 帧号 / 帧率
+            # 采样帧时间点 = 帧号 / 视频真实帧率。
+            # ⚠ 基准 C（帧号换算），**只能用于界面显示，不能当剪辑时间**。
+            # 可变帧率素材上这个换算会失真；剪辑一律使用镜头切点等
+            # 源时间轴时间（见 mixcut/timebase.py）。
             fps = float(entry.get("fps") or 0) or 0.0
             t = (float(f) / fps) if fps else 0.0
             measured = dict(packed.get("measured") or {})
             frames_detail.append({
                 "frame_no": int(f),
                 "time": round(t, 3),
+                # 显式标记时间基准，供下游判断能不能用于剪辑
+                "time_base": "frame_index",
                 "is_bad": bool(is_bad_f),
                 "reason": reason_f,
                 "hit_keys": keys_f,
@@ -885,6 +1020,32 @@ class AnalysisWorker(QThread):
                 "all_limits": dict(cur_limits),
                 "quality_score": packed.get("quality_score"),
             })
+
+        # ---- C：标注这份结果的可信度 ----
+        # 必须放在 frames_detail 算完之后：of_item 靠它判断「数据是否完整」。
+        #
+        # 这里**不用裸 except 吞异常**。早期版本 frames_detail 先用后定义，
+        # NameError 被 `except Exception: integrity_d = None` 悄悄吃掉，
+        # 结果是 C 功能整体失效、界面永远不报警，而日志里一个字都没有。
+        # 现在只捕获可预期的错误，并把原因带到结果里，供界面/日志显示。
+        integrity_d = None
+        integrity_error = ""
+        try:
+            from mixcut.verdict_integrity import of_item
+            integrity = of_item(
+                {"frames_detail": frames_detail,
+                 "is_bad": is_bad, "score": score},
+                expected_frames=len(cv_frames),
+                current_signature=self._verdict_signature())
+            integrity_d = integrity.to_dict()
+        except Exception as exc:      # noqa: BLE001 - 记录而非静默
+            integrity_error = "%s: %s" % (type(exc).__name__, exc)
+            try:
+                ctrl = getattr(self.win, "controller", None)
+                if ctrl is not None and hasattr(ctrl, "log"):
+                    ctrl.log("分析中心 · 可信度标注失败：%s" % integrity_error)
+            except Exception:
+                pass
 
         return {
             "frag_id": fragment_id(entry["path"], entry["seg_start"], entry["seg_end"]),
@@ -909,6 +1070,9 @@ class AnalysisWorker(QThread):
             "frames_detail": frames_detail,
             # ---- C：可信度标注 ----
             "integrity": integrity_d,
+            # 标注失败时的原因（空串=正常）。留着便于排查，
+            # 而不是像早期版本那样让异常彻底消失。
+            "integrity_error": integrity_error,
             "analyzed_signature": self._verdict_signature(),
             "verdict_limits": {
                 "bad_ratio": ratio_limit,

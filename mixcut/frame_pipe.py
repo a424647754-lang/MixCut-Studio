@@ -357,6 +357,13 @@ def iter_frames(
                 continue
             prev_chunk = chunk
             frame = np.frombuffer(chunk, dtype=np.uint8).reshape(out_h, out_w, 3)
+            # ⚠ 基准 B：采样序号换算的秒，**不是视频 PTS**。
+            #   fps 是这个函数的「采样频率」（默认 0.6 = 每 5 秒 3 帧），
+            #   不是素材帧率；index 是「第几个采样点」。
+            #   实测与真实 PTS 相差 0~27ms（取决于 fps 能否整除素材帧率）。
+            #   **只能用于界面显示与采样定位，不能当剪辑时间用。**
+            #   剪辑一律使用镜头切点 / ffprobe 时长等源时间轴时间。
+            #   见 mixcut/timebase.py。
             timestamp = index / fps
             index += 1
             yield timestamp, frame

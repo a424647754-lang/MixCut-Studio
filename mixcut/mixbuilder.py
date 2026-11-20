@@ -16,8 +16,10 @@ import random
 from pathlib import Path
 
 from . import analysis as analysis_core
+from . import coverage as cov
 from . import sentence_cut as scut
 from . import timeline as tl
+from . import visual_diversity as vd
 
 
 DEFAULT_MIX_OPTIONS = {
@@ -49,6 +51,16 @@ DEFAULT_MIX_OPTIONS = {
     # OpenCLIP 语义多样性：只调整候选优先级，不作为硬性过滤条件。
     "openclip_enabled": True,
     "openclip_weight": 2.0,
+    # ---- 时间覆盖（Coverage，2026-11-20 第二十一阶段）----
+    # 0 = 关闭（行为与旧版完全一致）；1 = 强制每条素材的时间轴被均匀使用。
+    # 防止「前 2 分钟画质好 → 成片几乎全来自前 2 分钟」。
+    "coverage": 0.0,
+    "coverage_weight": 3.0,
+    # ---- 视觉多样性（2026-11-20 第二十一阶段）----
+    # 用亮度/对比度/边缘/饱和度/运动五项传统特征判断画面是否雷同。
+    # 只看 source_id 不够：三个不同文件可以都是「人脸近景」，连排照样单调。
+    "visual_diversity": 0.0,      # 0 = 关闭；建议 1.5~3.0
+    "visual_similar_threshold": 0.92,
 }
 
 
@@ -298,7 +310,26 @@ def _decision_state():
         "last_tags": set(),   # 上一片段的标签
         "last_time": {},      # source_id -> 上一次出现在时间线的时刻
         "clip_recent": [],    # 最近若干片段的 OpenCLIP 语义向量
+        "visual_recent": [],  # 最近若干片段的传统视觉指纹（第二十一阶段）
+        "coverage": None,     # CoverageTracker 或 None（关闭时不创建）
     }
+
+
+def _visual_fingerprint_of(rng):
+    """取一个区间的视觉指纹；没有可用数据时返回 None。
+
+    指纹来自分析阶段已经算好的质量指标（亮度/对比度/边缘/饱和度/运动），
+    不需要额外解码。缺数据时返回 None，调用方跳过这项评分——
+    **不因为缺数据就把片段判死**。
+    """
+    fp = rng.get("visual_fp")
+    if fp is not None:
+        return fp if vd.usable(fp) else None
+    raw = rng.get("visual_metrics")
+    if not raw:
+        return None
+    fp = vd.fingerprint(raw)
+    return fp if vd.usable(fp) else None
 
 
 def _candidate_score(idx, ranges, state, t_now, tags_map, level, weights):
@@ -374,6 +405,26 @@ def _candidate_score(idx, ranges, state, t_now, tags_map, level, weights):
             and state["last_source"] == sid and range_count):
         score += 2.0
 
+    # 8) 时间覆盖（Coverage）：防止成片过度集中在素材的某一小段。
+    #    完全由 CoverageTracker 决定；coverage=0 时它未启用、恒返回 0，
+    #    行为与改造前一致。
+    tracker = state.get("coverage")
+    if tracker is not None:
+        score += tracker.penalty(sid, rng["start"])
+
+    # 9) 视觉多样性：与最近几个镜头「画面雷同」时扣分。
+    #    只看 source_id 不够——三个不同文件可以都是人脸近景，连排照样单调。
+    #    visual_diversity=0 时直接跳过，无额外开销。
+    visual_weight = max(0.0, float(weights.get("visual", 0.0)))
+    if visual_weight > 0:
+        recent_vis = state.get("visual_recent") or []
+        vec = _visual_fingerprint_of(rng)
+        if vec is not None and recent_vis:
+            score += vd.novelty_penalty(
+                vec, recent_vis,
+                threshold=float(weights.get("visual_threshold", 0.92)),
+                weight=visual_weight)
+
     return score
 
 
@@ -426,6 +477,11 @@ def _choose_candidate(indices, ranges, state, t_now, tags_map, level, rnd,
     weights["openclip"] = max(0.0, float(
         # 由调用方注入到候选状态的全局设置；缺省时保持兼容。
         state.get("openclip_weight", 0.0)))
+    # 视觉多样性权重与阈值（第二十一阶段）：0 表示关闭，不产生额外开销
+    weights["visual"] = max(0.0, float(
+        state.get("visual_diversity", 0.0) or 0.0))
+    weights["visual_threshold"] = float(
+        state.get("visual_threshold", 0.92) or 0.92)
     prev_tags = state.get("last_tags") or set()
     prev_sid = state.get("last_source")
 
@@ -488,6 +544,15 @@ def _record_decision(state, idx, rng, tags, t_now, seconds):
     if vector:
         state.setdefault("clip_recent", []).append(vector)
         state["clip_recent"] = state["clip_recent"][-5:]
+    # 传统视觉指纹同样只留最近几条：多样性只看「紧邻的镜头像不像」
+    vis = _visual_fingerprint_of(rng)
+    if vis is not None:
+        state.setdefault("visual_recent", []).append(vis)
+        state["visual_recent"] = state["visual_recent"][-5:]
+    # 覆盖记账：按「素材 + 起点」累加秒数，供后续候选算惩罚
+    tracker = state.get("coverage")
+    if tracker is not None:
+        tracker.record(sid, rng["start"], seconds)
     state["source_clips"][sid] = state["source_clips"].get(sid, 0) + 1
     state["source_sec"][sid] = state["source_sec"].get(sid, 0.0) + float(seconds)
     state["last_source"] = sid
@@ -502,6 +567,32 @@ def _refill_cursors(ranges, state):
         rng["cursor"] = rng["start"]
     state["range_clips"] = {}
 
+
+
+def _visual_metrics_of(frag):
+    """从分析页片段里抽出视觉指纹所需的五项指标。
+
+    分析页的片段结构（``_assemble`` 产出）里，统计量放在
+    ``metrics`` / ``frames_avg`` 等位置，这里做兼容式读取：
+    找不到就返回 None，绝不猜测性填值（填默认值会让所有片段指纹相同，
+    反而把「多样性」判成一模一样）。
+    """
+    if not isinstance(frag, dict):
+        return None
+    for key in ("metrics", "quality_metrics", "frames_avg", "avg_metrics"):
+        m = frag.get(key)
+        if isinstance(m, dict) and m:
+            picked = {k: m.get(k) for k in
+                      ("brightness", "contrast", "edge_density",
+                       "saturation", "motion")
+                      if m.get(k) is not None}
+            if picked:
+                return picked
+    # 退化：片段自身直接带这几个键
+    picked = {k: frag.get(k) for k in
+              ("brightness", "contrast", "edge_density", "saturation",
+               "motion") if frag.get(k) is not None}
+    return picked or None
 
 
 def _ranges_from_fragments(fragments, project, min_piece):
@@ -563,6 +654,10 @@ def _ranges_from_fragments(fragments, project, min_piece):
             "quality_reason": str(frag.get("reason", "")),
             "quality_available": True,
             "clip_embedding": frag.get("_clip_embedding"),
+            # 视觉指纹（第二十一阶段）：分析阶段已有的质量指标，
+            # 用来判断「两个不同素材的画面是否雷同」。缺数据时为 None，
+            # 评分时跳过该项，不会因为缺数据把片段判死。
+            "visual_metrics": _visual_metrics_of(frag),
             # 语音整句时间轴（分析页本身不转写，保留接口位）
             "sentences": frag.get("_sentences") or [],
             "sentence_ends": frag.get("_sentence_ends") or [],
@@ -715,6 +810,27 @@ def build_mix_timeline(paths, canvas, detect_options=None, mix_options=None,
         max(0.0, float(opt.get("openclip_weight", 2.0)))
         if opt.get("openclip_enabled", True) else 0.0
     )
+    # ---- 时间覆盖（Coverage）----
+    # 只在 coverage>0 时创建：不启用时 tracker 为 None，
+    # _candidate_score / _record_decision 都跳过，行为与改造前完全一致。
+    cov_strength = max(0.0, min(1.0, float(opt.get("coverage", 0.0) or 0.0)))
+    cov_weight = max(0.0, float(opt.get("coverage_weight", 3.0) or 0.0))
+    if cov_strength > 0.0 and cov_weight > 0.0:
+        durations = {s["id"]: float(s.get("duration") or 0.0)
+                     for s in project["sources"]}
+        clip_hint = max(1e-3, (float(opt.get("clip_min", 2.0))
+                               + float(opt.get("clip_max", 5.0))) / 2.0)
+        state["coverage"] = cov.CoverageTracker(
+            durations,
+            target_duration=float(opt.get("target_duration", 30.0) or 0.0),
+            clip_hint=clip_hint,
+            coverage=cov_strength,
+            weight=cov_weight,
+        )
+    # ---- 视觉多样性 ----
+    # 指纹来自分析阶段已有的质量指标，不需要额外解码。
+    state["visual_diversity"] = max(
+        0.0, float(opt.get("visual_diversity", 0.0) or 0.0))
     # 节奏状态（长短交替用）
     rhythm_state = {}
     # 统计连续“换了一个区间却没放下片段”的次数：只有剩余空间整体放不下
