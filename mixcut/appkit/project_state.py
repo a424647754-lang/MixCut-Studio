@@ -187,11 +187,24 @@ class ProjectStateMixin:
                             if c.get("path") == cur_path), "")
                 if cid:
                     self.controller._current = cid
-            # 撤回素材树时同步恢复分析结果，而不是只把素材放回来
+            # 撤回素材树时同步恢复分析结果，而不是只把素材放回来。
+            #
+            # ⚠ 2026-11-20 第二十六阶段修正
+            # ------------------------------
+            # 早期这里用 os.path.isfile 过滤 items，文件不在就丢弃。
+            # 问题是：**素材文件暂时不可达（移动硬盘没插、网络盘断开、
+            # 路径大小写变化）会被当成「没有分析结果」**，
+            # 于是 items 变空 → page.clear_results() → 卡片、贴图、统计
+            # 全部清空，而且清空后 redo 也找不回来（redo 存的是清空后的状态）。
+            #
+            # 用户看到的就是：按一下 Ctrl+Z，分析中心的贴图和缓存全没了，
+            # Ctrl+Y 也救不回来；随后保存工程，文件从几百 KB 掉到几十 KB。
+            #
+            # 现在改为**不过滤**：分析结果是纯数据，与文件当前是否可读无关。
+            # 真正需要文件的地方（混剪、预览）各自会检查并给出提示。
             ana = st.get("analysis") or {}
             items = [r for r in (ana.get("items") or [])
-                     if isinstance(r, dict) and r.get("path")
-                     and os.path.isfile(r["path"])]
+                     if isinstance(r, dict) and r.get("path")]
             if page is not None:
                 if items:
                     page.load_results(items, finished=bool(ana.get("finished", True)),

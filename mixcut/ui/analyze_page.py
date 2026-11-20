@@ -2770,8 +2770,23 @@ class AnalyzePage(QWidget):
         return dropped
 
     def load_results(self, items, finished=True, mode_key=None):
-        """从工程恢复分析结果：只重建界面，不重新跑分析。"""
+        """从工程恢复分析结果：只重建界面，不重新跑分析。
+
+        ⚠ 注意 clear_results() 会清缩略图缓存（clear_pixmap_cache）。
+        撤销/重做时调本方法若也清缓存，就会出现「贴图全没了」——
+        所以这里**先备份再还原**缩略图，避免一次撤销把画面变成空白。
+
+        （2026-11-20 第二十六阶段：用户反馈 Ctrl+Z 后贴图消失且无法恢复。）
+        """
+        # 备份已生成的缩略图：撤销/重做不该让卡片变成空壳
+        saved_thumbs = dict(getattr(self, "_seg_thumbs", {}) or {})
         self.clear_results()
+        # 还原缩略图（clear_results 里调了 clear_pixmap_cache）
+        try:
+            if saved_thumbs:
+                self._seg_thumbs.update(saved_thumbs)
+        except Exception:
+            pass
         if mode_key in ANALYSIS_MODES:
             self._mode_key = mode_key
             try:
@@ -3178,7 +3193,18 @@ class AnalyzePage(QWidget):
         gap = 12
         card_w = 236
         cols = max(1, int((view_w + gap) // (card_w + gap)))
+
+        # 列数没变时跳过重排。
+        # QGridLayout.addWidget 只是把控件挪到新的 (row, col)，
+        # 不清掉旧位置留下的占位；窗口拖动时 resizeEvent 会疯狂触发，
+        # 每次都重排容易让布局里积下过期的行列占位，
+        # 表现就是「一行有时 2 个有时 3 个」「顺序从左到右乱跳」。
+        # 只有列数真的变了才重排，能大幅减少这种抖动。
+        if getattr(self, "_cols", None) == cols and \
+                getattr(self, "_laid_out_count", None) == len(self.cards):
+            return
         self._cols = cols
+        self._laid_out_count = len(self.cards)
         # 文件夹卡片固定占顶部整行，片段从文件夹下面那行开始。
         for i, folder in enumerate(self._folder_tiles_for_view()):
             tile = self.folder_tiles.get(folder["id"])
@@ -4001,9 +4027,14 @@ class AnalyzePage(QWidget):
             new_cfg = dlg.applied_config()
             if new_cfg is not None:
                 self.verdict_config = new_cfg
-                # 规则只影响「实测 vs 阈值」的比较，实测值已经在缓存里，
-                # 因此这里**不需要重新解码视频**，只重新聚合一遍即可（毫秒级）。
-                # 这正是判废规则与缓存解耦后带来的好处。
+                # ⚠ 关键：必须同时更新 worker 的配置。
+                # 真正做判定的是 worker._assemble → worker._judge_frame，
+                # 它读的是 **worker.verdict_config**。只改页面上的这一份，
+                # 重新判定会用旧配置跑一遍，结论当然不变——用户看到的就是
+                # 「点了应用但毫无反应」。见台账第二十六阶段。
+                worker = getattr(self, "_worker", None)
+                if worker is not None:
+                    worker.verdict_config = new_cfg
                 self.win.controller.log(
                     "分析中心 · 已应用判废建议，正在按新规则重新判定（无需重新分析）")
                 self._reapply_verdict()
@@ -4037,6 +4068,16 @@ class AnalyzePage(QWidget):
             self.win.controller.log(
                 "分析中心 · 重新判定失败：后台分析器不存在")
             return -1
+        # 保险：确保 worker 用的是页面当前这份配置。
+        # 调用方可能只更新了一边（历史上就出过这个 bug），
+        # 这里统一兜一次，避免「配置对了但判定用旧值」。
+        # **必须在下面的提前 return 之前做**——否则没有可重算的片段时
+        # 配置就同步不过去，下次分析还会拿着旧配置跑。
+        page_cfg = getattr(self, "verdict_config", None)
+        if page_cfg is not None and getattr(worker, "verdict_config", None) \
+                is not page_cfg:
+            worker.verdict_config = page_cfg
+
         roster = getattr(worker, "_roster", None) or []
         items = getattr(worker, "_items", None) or {}
         if not roster or not items:
