@@ -722,6 +722,12 @@ class BackendBridge(QObject):
                     box.setValue(page.freeze_min.value())
                 elif key == "silence_min_duration":
                     box.setValue(page.silence_min.value())
+            # 时间覆盖 / 画面相似度（第二十一阶段）：旧界面没有这两个控件，
+            # 直接把下拉索引挂到 old 上，由 mix_task 组装 mix_options 时读取。
+            old._mix_extra = {
+                "coverage_index": page.coverage.currentIndex(),
+                "visual_div_index": page.visual_div.currentIndex(),
+            }
         except Exception:
             self.win.controller.log("参数同步到旧后台失败：%s" %
                                     traceback.format_exc().splitlines()[-1])

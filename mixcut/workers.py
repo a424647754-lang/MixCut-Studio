@@ -298,6 +298,13 @@ class MixBuildWorker(BaseWorker):
             if self.transition_options.get("enabled"):
                 tr.apply_transition_rules(project, self.transition_options)
 
+            # ---- 成片自检（第二十一阶段 21.7）----
+            # 放在「生成草稿之前」：时间线有问题就���用户看，
+            # 而不是先写一份可能有问题的草稿再让用户在剪映里发现。
+            # 自检只读时间线、不修改它，也不阻断流程——结果写进日志和前端的
+            # summary，由用户决定要不要调整参数重来。
+            self._run_delivery_check(project, i + 1, project_count)
+
             name_i = (
                 base_name if project_count == 1
                 else f"{base_name}_{i + 1}"
@@ -346,8 +353,71 @@ class MixBuildWorker(BaseWorker):
             self.mix_options.get("target_duration", 0.0) or 0.0
         )
         summary["beat_sync"] = bool(beats)
+        # 成片自检结果随 summary 带出（第二十一阶段 21.7）
+        reports = getattr(self, "delivery_reports", None) or []
+        if reports:
+            summary["delivery_reports"] = reports
+            agg = {ERROR: 0 for ERROR in ("error", "warn", "info")}
+            for rep in reports:
+                for k, v in (rep.get("summary") or {}).items():
+                    if k in agg:
+                        agg[k] += v
+            summary["delivery_summary"] = agg
+            summary["delivery_ok"] = (agg["error"] == 0 and agg["warn"] == 0)
         self.progress.emit(100, f"批量生成完成，共 {len(results)} 个工程")
         self.built.emit(summary)
+
+    # -------------------------------------------------
+    # 成片自检（第二十一阶段 21.7）
+    # -------------------------------------------------
+    def _run_delivery_check(self, project, index, total):
+        """对刚生成的时间线做一次自检，把结果写进日志并缓存到 self。
+
+        不抛异常、不中断流程：自检本身失败（比如代码 bug）不应该让
+        已经算好的混剪结果作废。所有异常都在这里吞掉并记日志。
+
+        结果保存到 ``self.delivery_reports``（list），供 built 信号带出。
+        """
+        try:
+            from . import delivery_check as dc
+            target = float(self.mix_options.get("target_duration", 0.0) or 0.0)
+            tolerance = float(
+                self.mix_options.get("duration_tolerance", 2.0) or 2.0)
+            report = dc.check_timeline(
+                project,
+                target_duration=target if target > 0 else None,
+                tolerance=tolerance,
+            )
+        except Exception:
+            self.progress.emit(
+                0, "成片自检未能执行（不影响草稿生成）：%s"
+                % traceback.format_exc().splitlines()[-1])
+            return
+
+        if not hasattr(self, "delivery_reports"):
+            self.delivery_reports = []
+        self.delivery_reports.append(report)
+
+        summary = report.get("summary") or {}
+        errors = summary.get("error", 0)
+        warns = summary.get("warn", 0)
+        prefix = "[%d/%d] " % (index, total) if total > 1 else ""
+
+        if errors == 0 and warns == 0:
+            self.progress.emit(0, "%s成片自检通过（无异常）" % prefix)
+            return
+
+        self.progress.emit(
+            0, "%s成片自检：%d 个错误 / %d 个提醒"
+            % (prefix, errors, warns))
+        # 输出前 5 条，避免日志被刷屏
+        for it in (report.get("issues") or [])[:5]:
+            self.progress.emit(
+                0, "  · [%s] %s" % (it.get("level", ""), it.get("title", "")))
+        fixes = dc.suggest_fixes(report)
+        if fixes:
+            for f in fixes[:3]:
+                self.progress.emit(0, "  → 建议：%s" % f.get("action", ""))
 
     # -------------------------------------------------
     # 素材分析（带缓存）

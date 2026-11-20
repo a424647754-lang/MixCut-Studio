@@ -269,12 +269,31 @@ class ParamsPage(QWidget):
                              "脉冲节奏（短长强对比）", "断奏（极短密集）", "电影感（长镜头为主）"])
         self.version = combo(["均衡混剪", "多版本轮换（快节奏/多样性/长短交替/音乐优先）"])
         self.beat_step = combo(["自动（按 BPM）", "每 1 拍切换", "每 2 拍切换", "每 4 拍切换"])
+        # ---- 时间覆盖（Coverage，第二十一阶段 21.6）----
+        # 防止成片过度集中在素材的某一段：一条 10 分钟素材如果前 2 分钟画质好，
+        # 关闭时成片可能几乎全来自前 2 分钟。
+        self.coverage = combo([
+            "关闭（只按质量取）",
+            "轻度（略有倾向）",
+            "中度（明显分散）",
+            "强度（尽量铺满全片）",
+        ])
+        # ---- 画面相似度惩罚（visual_diversity，第二十一阶段 21.6）----
+        # 只看「素材不同」不够：三个不同文件可以都是人脸近景，连排照样单调。
+        # 用亮度/对比度/边缘/饱和度/运动五项特征判断画面是否雷同。
+        self.visual_div = combo([
+            "关闭",
+            "轻度（只罚几乎一样的画面）",
+            "中度（推荐）",
+            "强（宁可打断连贯也要多样）",
+        ])
 
         fields = [
             ("清晰度", self.resolution), ("帧率", self.fps), ("目标时长", self.target),
             ("时长浮动 ±", self.tolerance), ("生成工程数", self.count), ("最短片段", self.clip_min),
             ("最长片段", self.clip_max), ("重复控制", self.diversity), ("时长策略", self.rhythm),
             ("版本策略", self.version), ("卡点密度", self.beat_step),
+            ("时间覆盖", self.coverage), ("画面相似度", self.visual_div),
         ]
         for i, (label, ctrl) in enumerate(fields):
             grid.addWidget(Field(label, ctrl), i // 3, i % 3)
@@ -549,6 +568,9 @@ class ParamsPage(QWidget):
             "rhythm": self.rhythm.currentIndex(),
             "version": self.version.currentIndex(),
             "beat_step": self.beat_step.currentIndex(),
+            # 时间覆盖 / 画面相似度（第二十一阶段）
+            "coverage": self.coverage.currentIndex(),
+            "visual_div": self.visual_div.currentIndex(),
             "toggles": {
                 "shuffle": self.t_shuffle.toggle.isChecked(),
                 "reuse": self.t_reuse.toggle.isChecked(),

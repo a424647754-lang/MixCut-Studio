@@ -55,6 +55,14 @@ from mixcut import timeline as tl_mod
 from .constants import MIX_RESOLUTION_PRESETS, MIX_FPS_OPTIONS
 
 
+# ---- 时间覆盖 / 画面相似度的下拉映射（第二十一阶段）----
+# 下拉第 0 项固定是「关闭」，对应 0.0 / 0 权重，行为与改造前完全一致。
+# 覆盖度阶梯：0 / 0.4 / 0.7 / 1.0（强度越高，越倾向铺满整条素材时间轴）
+MIX_COVERAGE_LEVELS = (0.0, 0.4, 0.7, 1.0)
+# 画面相似度惩罚阶梯：0 / 2.0 / 4.0 / 7.0
+MIX_VISUAL_LEVELS = (0.0, 2.0, 4.0, 7.0)
+
+
 class MixTaskMixin:
     """智能混剪任务。"""
 
@@ -313,6 +321,24 @@ class MixTaskMixin:
             "beat_tolerance": self.mix_beat_tolerance.value()
             if hasattr(self, "mix_beat_tolerance") else 0.12,
         }
+        # ---- 时间覆盖 / 画面相似度（第二十一阶段）----
+        # 新 UI 的下拉索引经 backend_bridge.sync_params 挂到 _mix_extra 上。
+        # 旧界面没有这两个控件，缺失时保持默认（都是关闭），行为与改造前一致。
+        extra = getattr(self, "_mix_extra", None) or {}
+        try:
+            cov_idx = int(extra.get("coverage_index", 0))
+        except (TypeError, ValueError):
+            cov_idx = 0
+        try:
+            vis_idx = int(extra.get("visual_div_index", 0))
+        except (TypeError, ValueError):
+            vis_idx = 0
+        # 下拉 0 = 关闭，1~3 依次递增
+        mix_options["coverage"] = MIX_COVERAGE_LEVELS[
+            max(0, min(len(MIX_COVERAGE_LEVELS) - 1, cov_idx))]
+        mix_options["coverage_weight"] = 8.0 if cov_idx > 0 else 0.0
+        mix_options["visual_diversity"] = MIX_VISUAL_LEVELS[
+            max(0, min(len(MIX_VISUAL_LEVELS) - 1, vis_idx))]
         # 版本策略：单个工程走固定策略；多工程可轮换不同算法倾向
         version_choice = (
             self.mix_version.currentData()
